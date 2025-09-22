@@ -17,15 +17,24 @@ def set_seed(seed=1337):
 def _chat_openai(prompt: str, system: str|None, model_name: str) -> str:
     try:
         from openai import OpenAI
-        client = OpenAI(api_key=os.getenv("OPENAI_API_KEY"))
+        client = OpenAI(
+            api_key=os.getenv("OPENAI_API_KEY"),
+            base_url=os.getenv("OPENAI_BASE_URL", "https://api.openai.com/v1")
+        )
         messages = []
         if system:
-            messages.append({"role":"system","content":system})
-        messages.append({"role":"user","content":prompt})
-        resp = client.chat.completions.create(model=model_name, messages=messages, temperature=0.2, max_tokens=128)
+            messages.append({"role": "system", "content": system})
+        messages.append({"role": "user", "content": prompt})
+        resp = client.chat.completions.create(
+            model=model_name,
+            messages=messages,
+            temperature=0.2,
+            max_tokens=128
+        )
         return resp.choices[0].message.content.strip()
-    except Exception:
-        return "I don't know."
+    except Exception as e:
+        return f"Error: {e}"
+
 
 def _chat_azure_openai(prompt: str, system: str|None, deployment: str, endpoint: str) -> str:
     try:
