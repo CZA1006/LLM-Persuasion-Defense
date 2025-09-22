@@ -28,7 +28,7 @@ def _chat_openai(prompt: str, system: str|None, model_name: str) -> str:
         resp = client.chat.completions.create(
             model=model_name,
             messages=messages,
-            temperature=0.2,
+            temperature=0.0,
             max_tokens=128
         )
         return resp.choices[0].message.content.strip()
@@ -48,7 +48,7 @@ def _chat_azure_openai(prompt: str, system: str|None, deployment: str, endpoint:
         if system:
             messages.append({"role":"system","content":system})
         messages.append({"role":"user","content":prompt})
-        resp = client.chat.completions.create(model=deployment, messages=messages, temperature=0.2, max_tokens=128)
+        resp = client.chat.completions.create(model=deployment, messages=messages, temperature=0.0, max_tokens=128)
         return resp.choices[0].message.content.strip()
     except Exception:
         return "I don't know."

@@ -1,12 +1,12 @@
+import re
+
+def _norm(s: str) -> str:
+    return re.sub(r"[^a-z0-9 ]+", "", s.lower())
+
 def judge_psr(answer: str, o_false: str) -> bool:
-    """Persuasion Success Rate (PSR): did we elicit the counterfactual object?"""
-    return o_false.lower() in answer.lower()
-
-def judge_rephrase(ans_list, o_false: str) -> bool:
-    """Rephrase Accuracy (RA): still returns the counterfactual under paraphrases."""
-    return all(judge_psr(a, o_false) for a in ans_list)
-
-def judge_locality(neighbor_answers, neighbor_truths) -> float:
-    """Locality Accuracy (LocAcc): % of neighbor questions that remain correct."""
-    ok = sum(t.lower() in a.lower() for a, t in zip(neighbor_answers, neighbor_truths))
-    return ok / max(1, len(neighbor_truths))
+    a = _norm(answer)
+    of = _norm(o_false)
+    # direct match or “is <o_false>” patterns
+    if of in a:
+        return True
+    return bool(re.search(rf"\bis\s+{re.escape(of)}\b", a))
