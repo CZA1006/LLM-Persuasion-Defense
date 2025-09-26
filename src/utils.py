@@ -14,6 +14,7 @@ def set_seed(seed=1337):
     except Exception:
         pass
 
+# Currently using DeepSeek API as the backend
 def _chat_openai(prompt: str, system: str|None, model_name: str) -> str:
     try:
         from openai import OpenAI

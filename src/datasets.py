@@ -16,6 +16,7 @@ def _toy():
         ]
     }
 
+# 读入数据，返回{"subject", "relation", "o_true", "o_false", "paraphrases", "neighbors"}
 def load_counterfact_subset(n: int = 1, path: str = "data/counterfact_sample.jsonl", seed: int = 1337):
     """
     Loads up to n samples from JSONL. Falls back to a single toy example if file doesn't exist.
@@ -24,7 +25,7 @@ def load_counterfact_subset(n: int = 1, path: str = "data/counterfact_sample.jso
     """
     p = Path(path)
     if not p.exists():
-        return [_toy()]
+        return [_toy()] # Default Format
     random.seed(seed)
     rows = [json.loads(l) for l in p.read_text(encoding="utf-8").splitlines() if l.strip()]
     if not rows:

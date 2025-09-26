@@ -86,7 +86,7 @@ def main():
 
     summaries_print = []
 
-    if args.mode == "turns":
+    if args.mode == "turns": # 执行前n个策略，例如max_turn = 1, 使用前1个策略["flattery"]，max_turn = 2, 第一轮同上，第二轮就使用authority策略，以此类推，若中，可提前结束
         # Per condition we’ll collect per-repeat summaries then aggregate.
         final_rows_per_t = {}   # t -> list of rows from all repeats (for optional mega export)
         summary_rows = []       # rows for summary CSV
@@ -118,8 +118,9 @@ def main():
         print("\nSaved:", sum_path)
 
     else:  # mode == order
+        # 比较不同策略排列顺序（shuffle）对 PSR 的影响。两组对照：seqA 与 seqB。固定max turn
         summary_rows = []
-        for k in range(args.shuffles):
+        for k in range(args.shuffles): # k = shuffle次数
             # each shuffle is its own condition; repeats average out dataset/model randomness
             all_rows = []
             for r in range(args.repeats):

@@ -3,10 +3,11 @@ from src.datasets import load_counterfact_subset
 from src.strategies import ORDER_DEFAULT
 from src.evaluate import evaluate_one
 
+# 端到端快速跑通
 def main():
     set_seed(1337)
     # load 1 sample (toy or from JSONL if present)
-    data = load_counterfact_subset(n=1)
+    data = load_counterfact_subset(n=1) # 调用counterfact_sample.jsonl
     ex = data[0]
 
     res_no_def = evaluate_one(ex, ORDER_DEFAULT, defense=None)

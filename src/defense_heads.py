@@ -10,6 +10,11 @@ This skeleton exposes a uniform interface without tying to a specific HF archite
 
 from typing import Dict, List, Optional
 
+'''
+从可解释性出发，在模型内部（attention/head）层面做干预：当检测到说服模式时，通过“门控”抑制一部分注意力头或特征，使得模型无法被特定模式激活。
+后续实现参考论文：Llama See Llama Do
+当前为预留接口，未验证
+'''
 class HeadGate:
     def __init__(self, layer2heads: Dict[int, List[int]], scale: float = 0.0):
         """
