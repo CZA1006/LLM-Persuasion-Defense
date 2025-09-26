@@ -1,55 +1,53 @@
 # Experimental Results: LLM-Persuasion-Defense
 
-This document reports the results of our Crescendo-style persuasion experiments with and without defense strategies.
+This document reports results of Crescendo-style persuasion experiments with and without defenses, using repeated runs and 95% confidence intervals (CI).
 
 ---
 
 ## 1. Turns Ablation
 
-**Setup:** We varied the maximum number of persuasion turns (1, 2, 4, 6) under two conditions:  
-- **No Defense** (baseline)  
-- **Override Defense** (system message forcing factual answers)
+**Setup:** We varied persuasion turns (1, 2, 4, 6) under:
+- **No Defense** (baseline)
+- **Override Defense** (prompt-based factual override)
 
-**Findings (see `results/plots/psr_vs_turns.png`):**
-- Without defense, persuasion success rate (PSR) reached **18%** at 2 turns, while stabilizing around **9%** at 1, 4, and 6 turns.
-- With defense, **PSR remained 0%** across all turns.
-- Locality accuracy (LocAcc) was consistently **100%**, showing defenses did not harm unrelated factual recall.
-- Rephrase persistence (RA) was **0%** in all conditions, indicating attacks did not generalize to rephrased queries.
+**Findings (see CI plots):**
+- **No Defense:** PSR averaged **~9–12%**, peaking near **12% at 2 turns**. CIs are wide, reflecting small dataset size, but persuasion is consistently nonzero.
+- **Override:** PSR stayed **0% across all turns** with tight CIs at 0.
+- **RA:** 0% in all cases (no persistence observed).
+- **LocAcc:** 100% across conditions, showing defenses did not harm unrelated knowledge.
 
 ---
 
 ## 2. Order Ablation
 
-**Setup:** We shuffled the order of persuasion strategies across 5 runs (0–4).
+**Setup:** We shuffled persuasion strategy order (10+ random shuffles).
 
-**Findings (see `results/plots/order_ablation_psr.png`):**
-- PSR varied strongly with strategy order under **No Defense**:
-  - Shuffle 1 reached **100% PSR**.
-  - Shuffle 0 around **55%**.
-  - Other shuffles stayed near **9%**.
-- With defense, **PSR = 0% in all shuffles**, fully neutralizing order sensitivity.
-- LocAcc again remained **100%**, showing no degradation in unrelated tasks.
+**Findings:**
+- **No Defense:** Order strongly affects success. Some shuffles averaged **~54% PSR**, while others stayed near 9–12%. CIs confirm substantial variance.
+- **Override:** PSR remained **0% in all shuffles**, eliminating order sensitivity.
+- **LocAcc:** Again perfect at 100%.
 
 ---
 
 ## 3. Key Observations
 
-1. **Crescendo attacks succeed** in the absence of defenses, especially with favorable strategy orderings.
-2. **Defense overrides are highly effective**, eliminating all persuasion success while preserving locality.
-3. **Attack persistence is weak** under current evaluation (RA=0). Stronger rephrase probes or LLM-judge scoring may be needed to capture subtle persistence.
-4. **Strategy order matters** greatly for attack effectiveness; defenses collapse this variance.
+1. **Attacks succeed modestly** without defenses, but can spike high under favorable orderings.
+2. **Override defense is consistently effective**, driving PSR to zero while preserving LocAcc.
+3. **RA probing was too weak** here; persistence was always 0%. Richer paraphrases or LLM-judge scoring are needed.
+4. **Strategy order matters greatly** under no defense, but defenses collapse this variance.
 
 ---
 
-## 4. Figures
+## 4. Figures (95% CI)
+
 - **PSR vs Turns**  
-  ![](notebooks/results/plots/psr_vs_turns.png)
+  ![](notebooks/results/plots/psr_vs_turns_ci.png)
 
 - **RA vs Turns**  
-  ![](notebooks/results/plots/ra_vs_turns.png)
+  ![](notebooks/results/plots/ra_vs_turns_ci.png)
 
 - **LocAcc vs Turns**  
-  ![](notebooks/results/plots/locacc_vs_turns.png)
+  ![](notebooks/results/plots/locacc_vs_turns_ci.png)
 
 - **Order Ablation: PSR by Shuffle**  
-  ![](notebooks/results/plots/order_ablation_psr.png)
+  ![](notebooks/results/plots/order_ablation_psr_ci.png)

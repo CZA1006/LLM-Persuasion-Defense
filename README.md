@@ -16,40 +16,38 @@ conda activate llm-persuasion-defense
 
 ---
 
-## 2) Secrets & model config
-
-Copy and edit the template:
+## 2) Secrets & Model Config
 
 ```bash
 cp .env.template .env
 ```
 
-Then set one of the backends:
+Set one backend:
 
-- **OpenAI**: set `BACKEND=openai`, `OPENAI_API_KEY`, and pick a model (e.g., `gpt-4o-mini`).
-- **Azure OpenAI**: set `BACKEND=azure_openai`, `AZURE_OPENAI_API_KEY`, `AZURE_OPENAI_ENDPOINT`, `AZURE_OPENAI_DEPLOYMENT`.
-- **HuggingFace (local/remote)**: set `BACKEND=hf`, `HF_MODEL` (e.g., `meta-llama/Meta-Llama-3.1-8B-Instruct`), optionally `HF_TOKEN`.
+- **OpenAI**: `BACKEND=openai`, set `OPENAI_API_KEY`, and choose model (e.g., `gpt-4o-mini`).  
+- **Azure OpenAI**: `BACKEND=azure_openai`, set `AZURE_OPENAI_API_KEY`, `AZURE_OPENAI_ENDPOINT`, `AZURE_OPENAI_DEPLOYMENT`.  
+- **HuggingFace**: `BACKEND=hf`, set `HF_MODEL` (e.g., `meta-llama/Meta-Llama-3.1-8B-Instruct`) and `HF_TOKEN`.  
 
-Backoff defaults to a **safe placeholder** if no backend is configured (the pipeline will still run, but returns neutral answers).
+If no backend is set, the pipeline still runs but returns neutral answers.
 
 ---
 
-## 3) Run a minimal end-to-end evaluation
+## 3) Run a Minimal Evaluation
 
 ```bash
 python main.py
 ```
 
-You’ll see two lines:
-- **No-Defense**: baseline multi-turn persuasion attempt (Crescendo sequence).
-- **Override**: same run with a **prompt-based context override** defense enabled.
+Outputs:
+- **No-Defense**: baseline Crescendo persuasion attempt.
+- **Override**: same run with prompt-based override defense.
 
 ---
 
 ## 4) Data
 
-By default, we include a small toy example.  
-To use real samples, place a JSONL file at `data/counterfact_sample.jsonl` with lines like:
+Default: a toy example.  
+To use real samples, place `data/counterfact_sample.jsonl` with entries like:
 
 ```json
 {"subject":"Hugo Eberlein", "relation":"profession",
@@ -60,28 +58,42 @@ To use real samples, place a JSONL file at `data/counterfact_sample.jsonl` with 
 
 ---
 
-## 5) What’s inside
+## 5) Components
 
-- `src/strategies.py` — the **13 persuasion strategies** (flattery, authority, fluency, conformity, info isolation, quantity, quality, repetition, scarcity, framing, affective forecasting, Wikipedia-style, emotional framing) + default Crescendo order.
-- `src/orchestrate.py` — a minimal **Crescendo-style multi-turn** persuasion loop.
-- `src/scorers.py` — judges for **PSR** (success), **RA** (rephrase/generalization), **LocAcc** (locality/side-effects).
-- `src/defense_ctx.py` — **context defenses** (prompt-based override, simple prefilter hook).
-- `src/defense_heads.py` — a **skeleton** for **entrainment head gating** hooks (to integrate with the “Llama See, Llama Do” repo later).
-- `src/utils.py` — **chat_once** for OpenAI / Azure OpenAI / HuggingFace backends (selected by `BACKEND`), plus seeding & helpers.
-- `src/datasets.py` — loads toy data or `counterfact_sample.jsonl`.
-
----
-
-## 6) Next steps
-
-1. Swap toy data with a larger **COUNTERFACT** subset.
-2. Integrate **PyRIT** campaigns (Crescendo orchestrator) in `configs/` or directly in `orchestrate.py`.
-3. Implement **entrainment head discovery** (from the companion repo) and wire it to `defense_heads.HeadGate`.
-4. Add plots in `notebooks/02_results_plots.ipynb` for PSR/RA/LocAcc and per-turn success curves.
+- `src/strategies.py` — 13 persuasion strategies + Crescendo order  
+- `src/orchestrate.py` — multi-turn persuasion loop  
+- `src/scorers.py` — judges for PSR, RA, LocAcc  
+- `src/defense_ctx.py` — context defenses (override, prefilter)  
+- `src/defense_heads.py` — skeleton for head gating (interpretability)  
+- `src/utils.py` — backend chat interface, seeding helpers  
+- `src/datasets.py` — loads toy/Counterfact samples  
 
 ---
 
-## 7) Safety & Ethics
+## 6) Results
+
+We ran repeated ablations with 95% CIs:
+
+- **No Defense:** PSR ~9–12% baseline, up to ~54% in favorable orders.  
+- **Override Defense:** PSR consistently 0%, with no harm to locality.  
+- **RA:** 0% in all settings (no persistence detected).  
+- **LocAcc:** 100% throughout.  
+
+Plots are in `results/plots/` and summarized in [RESULTS.md](RESULTS.md).
+
+---
+
+## 7) Next Steps
+
+1. Expand dataset size (larger CounterFact slice).  
+2. Add stronger RA probes + LLM-judge scoring.  
+3. Implement more defenses (prefilter/rewrite, retrieval-grounded, head gating).  
+4. Compare across backends (OpenAI vs DeepSeek).  
+5. Add cost/latency telemetry.  
+
+---
+
+## 8) Safety & Ethics
 
 This repository is for **research** into persuasion risks and defenses.  
-Do **not** deploy any attack prompts on real users or systems. Follow applicable policies and laws.
+Do **not** deploy attack prompts on real users or production systems.
