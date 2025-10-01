@@ -1,5 +1,5 @@
 # run_ablation.py
-import argparse, csv, json, random, time
+import argparse, csv, json, random, time, os
 from pathlib import Path
 from statistics import mean, pstdev
 from math import sqrt
@@ -70,6 +70,31 @@ def summarize_rows(rows: List[Dict]):
         "Loc_mean": loc_m, "Loc_lo": loc_lo, "Loc_hi": loc_hi,
     }
 
+# ---------- Backend overrides (CLI) ----------
+def apply_backend_overrides(args):
+    """
+    Optional: choose backend from the command line.
+    If not provided, values from .env are used.
+    """
+    if getattr(args, "provider", None):
+        os.environ["PROVIDER"] = args.provider
+    if getattr(args, "model", None):
+        active = (os.environ.get("PROVIDER") or os.getenv("PROVIDER","openai")).lower()
+        if active == "openai":
+            os.environ["OPENAI_MODEL"] = args.model
+        elif active == "deepseek":
+            os.environ["DEEPSEEK_MODEL"] = args.model
+    if getattr(args, "openai_base_url", None):
+        os.environ["OPENAI_BASE_URL"] = args.openai_base_url
+    if getattr(args, "deepseek_base_url", None):
+        os.environ["DEEPSEEK_BASE_URL"] = args.deepseek_base_url
+
+    # Log active backend for reproducibility
+    prov = os.getenv("PROVIDER", "openai").lower()
+    mdl = os.getenv("OPENAI_MODEL" if prov=="openai" else "DEEPSEEK_MODEL", "")
+    burl = os.getenv("OPENAI_BASE_URL" if prov=="openai" else "DEEPSEEK_BASE_URL", "")
+    print(f"[Backend] provider={prov} model={mdl} base_url={burl or 'default'}")
+
 # ---------- CLI ----------
 def main():
     ap = argparse.ArgumentParser()
@@ -80,13 +105,28 @@ def main():
     ap.add_argument("--defense", choices=["none","override","prefilter"], default="none")
     ap.add_argument("--turns", type=int, nargs="+", default=[1,2,4,6], help="for mode=turns")
     ap.add_argument("--shuffles", type=int, default=10, help="for mode=order")
+    # --- Optional backend selection (overrides .env) ---
+    ap.add_argument("--provider", choices=["openai","deepseek"], default=None,
+                    help="Backend for this run; overrides .env PROVIDER")
+    ap.add_argument("--model", type=str, default=None,
+                    help="Model name for the selected provider (OPENAI_MODEL / DEEPSEEK_MODEL)")
+    ap.add_argument("--openai-base-url", type=str, default=None,
+                    help="Override OpenAI base URL (default proxy: https://api.laozhang.ai/v1)")
+    ap.add_argument("--deepseek-base-url", type=str, default=None,
+                    help="Override DeepSeek base URL (default: https://api.deepseek.com/v1)")
     args = ap.parse_args()
+
+    # Apply backend choice before any calls into utils.chat_once(...)
+    apply_backend_overrides(args)
 
     defense_arg = None if args.defense=="none" else args.defense
 
     summaries_print = []
 
-    if args.mode == "turns": # 执行前n个策略，例如max_turn = 1, 使用前1个策略["flattery"]，max_turn = 2, 第一轮同上，第二轮就使用authority策略，以此类推，若中，可提前结束
+    if args.mode == "turns": 
+        '''
+        执行前n个策略，例如max_turn = 1, 使用前1个策略["flattery"]，max_turn = 2, 
+        第一轮同上，第二轮就使用authority策略，以此类推，若中，可提前结束'''
         # Per condition we’ll collect per-repeat summaries then aggregate.
         final_rows_per_t = {}   # t -> list of rows from all repeats (for optional mega export)
         summary_rows = []       # rows for summary CSV
