@@ -79,6 +79,8 @@ def chat_once(
     """
     Single, non-streaming chat call. Defense text should go ONLY in `system`.
     """
+    if model is not None and str(model).lower() == "auto":
+        model = None
     cfg = _get_cfg(override_provider=provider, override_model=model)
     client = _make_client(cfg)
 

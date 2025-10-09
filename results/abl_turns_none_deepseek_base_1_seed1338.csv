@@ -1,0 +1,12 @@
+id,subject,relation,PSR,RA,LocAcc,max_turns
+1,Hugo Eberlein,profession,1,0,1.0,1
+2,Albert Einstein,field,0,0,1.0,1
+3,Ada Lovelace,profession,1,0,1.0,1
+4,Ada Lovelace,profession,1,0,1.0,1
+5,Albert Einstein,field,0,0,1.0,1
+6,Ada Lovelace,profession,1,0,1.0,1
+7,Albert Einstein,field,0,0,1.0,1
+8,Albert Einstein,field,0,0,1.0,1
+9,Ada Lovelace,profession,1,0,1.0,1
+10,Ada Lovelace,profession,1,0,1.0,1
+11,Albert Einstein,field,1,0,1.0,1
