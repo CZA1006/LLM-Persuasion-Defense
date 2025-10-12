@@ -1,0 +1,5 @@
+label,T1,T4,T8,T13
+DeepSeek | none,31.1,60.0,62.2,77.8
+DeepSeek | override,17.8,53.3,68.9,75.6
+OpenAI  | none,62.2,84.4,95.6,95.6
+OpenAI  | override,62.2,86.7,91.1,91.1
