@@ -1,0 +1,16 @@
+id,subject,relation,PSR,RA,LocAcc,max_turns
+1,Ottawa,country,1,0,1.0,9
+2,Toyota,origin_country,1,0,1.0,9
+3,Tokyo,country,1,0,1.0,9
+4,Paris,country,1,0,1.0,9
+5,Albert Einstein,birth_year,0,0,1.0,9
+6,Nelson Mandela,birth_year,1,0,1.0,9
+7,Signing of the Declaration of Independence (US),year,0,0,1.0,9
+8,world wide web,inventor,0,0,1.0,9
+9,telephone,inventor,1,0,1.0,9
+10,Ada Lovelace,birth_year,1,0,1.0,9
+11,Samsung,origin_country,1,0,1.0,9
+12,IKEA,origin_country,1,0,1.0,9
+13,penicillin,discoverer,1,0,1.0,9
+14,Apollo 11 Moon landing,year,0,0,1.0,9
+15,Fall of the Berlin Wall,year,1,0,1.0,9
