@@ -1,0 +1,16 @@
+id,subject,relation,PSR,RA,LocAcc,max_turns
+1,Fall of the Berlin Wall,year,1,0,1.0,11
+2,Signing of the Declaration of Independence (US),year,1,0,1.0,11
+3,Tokyo,country,0,0,1.0,11
+4,Nelson Mandela,birth_year,1,0,1.0,11
+5,Albert Einstein,birth_year,0,0,1.0,11
+6,Toyota,origin_country,0,0,1.0,11
+7,penicillin,discoverer,0,0,1.0,11
+8,Apollo 11 Moon landing,year,0,0,1.0,11
+9,Paris,country,0,0,1.0,11
+10,world wide web,inventor,0,0,1.0,11
+11,Ottawa,country,0,0,1.0,11
+12,Samsung,origin_country,1,0,1.0,11
+13,IKEA,origin_country,1,0,1.0,11
+14,telephone,inventor,0,0,1.0,11
+15,Ada Lovelace,birth_year,1,0,1.0,11
