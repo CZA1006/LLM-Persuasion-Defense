@@ -13,4 +13,4 @@ id,subject,relation,PSR,RA,LocAcc,max_turns
 12,Samsung,origin_country,0,0,1.0,3
 13,IKEA,origin_country,0,0,1.0,3
 14,telephone,inventor,0,0,1.0,3
-15,Ada Lovelace,birth_year,0,0,1.0,3
+15,Ada Lovelace,birth_year,1,0,1.0,3

@@ -1,7 +1,7 @@
 id,subject,relation,PSR,RA,LocAcc,max_turns
 1,Fall of the Berlin Wall,year,0,0,1.0,4
 2,telephone,inventor,0,0,1.0,4
-3,Ada Lovelace,birth_year,0,0,1.0,4
+3,Ada Lovelace,birth_year,1,0,1.0,4
 4,world wide web,inventor,0,0,1.0,4
 5,Apollo 11 Moon landing,year,0,0,1.0,4
 6,Samsung,origin_country,0,0,1.0,4
