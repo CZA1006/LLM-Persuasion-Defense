@@ -1,339 +1,226 @@
 # src/utils.py
-# -*- coding: utf-8 -*-
-"""
-Utility helpers for API-backed chat calls, seeding, and timing.
-
-Key additions (backward compatible):
-- chat_once(..., model_override=None, return_meta=False)
-  * model_override: temporarily override the model used for ONE call.
-  * return_meta: if True, return (text, meta) with usage & latency info.
-- Provider-agnostic OpenAI-compatible client (works for OpenAI, DeepSeek, self-hosted OAI-compatible).
-
-Typical usage (old):
-    text = chat_once(system, user, provider="openai", model="gpt-4o")
-
-New usage (optional):
-    text, meta = chat_once(system, user, provider="openai", model="gpt-4o",
-                           model_override="gpt-4o-mini", return_meta=True)
-"""
-
 from __future__ import annotations
-
-import os
-import time
-import random
-import logging
+import os, time, random, numpy as np
 from dataclasses import dataclass
-from typing import Any, Dict, List, Optional, Tuple, Union
+from typing import Optional, Dict, Any, List, Tuple
 
-# OpenAI SDK (>=1.0). Most OAI-compatible services (e.g., DeepSeek) work by setting base_url + api_key.
+from dotenv import load_dotenv, find_dotenv
+
+# OpenAI SDK 支持自定义 base_url；可用于代理与 DeepSeek
+from openai import OpenAI
+from openai import APIConnectionError, RateLimitError, APIStatusError
+
+# -----------------------------------------------------------------------------
+# 自动加载 .env（向上查找项目根目录的 .env），避免每次手动 `source .env`
+# -----------------------------------------------------------------------------
 try:
-    from openai import OpenAI
-except Exception as _e:  # pragma: no cover
-    OpenAI = None  # type: ignore
+    _dotenv_path = find_dotenv(usecwd=True)
+    if _dotenv_path:
+        load_dotenv(_dotenv_path, override=False)
+    else:
+        load_dotenv(override=False)
+except Exception:
+    # 加载失败不致命，后续仍可依赖已有环境变量
+    pass
 
-# Optional: numpy / torch seeding if present
-try:
-    import numpy as np  # type: ignore
-except Exception:  # pragma: no cover
-    np = None  # type: ignore
-
-try:
-    import torch  # type: ignore
-except Exception:  # pragma: no cover
-    torch = None  # type: ignore
-
-LOGGER = logging.getLogger("utils")
-if not LOGGER.handlers:
-    _h = logging.StreamHandler()
-    _h.setFormatter(logging.Formatter("[%(asctime)s] %(levelname)s %(name)s: %(message)s"))
-    LOGGER.addHandler(_h)
-LOGGER.setLevel(logging.INFO)
-
-
-# -------------------------
-# Seeding
-# -------------------------
-
-def seed_everything(seed: Optional[int] = None) -> None:
-    """
-    Seed python, numpy, and torch (if available) for best-effort reproducibility.
-    """
-    if seed is None:
-        return
-    random.seed(seed)
+# -----------------------------------------------------------------------------
+# 随机种子
+# -----------------------------------------------------------------------------
+def set_seed(seed=1337):
+    random.seed(seed); np.random.seed(seed)
     try:
-        os.environ["PYTHONHASHSEED"] = str(seed)
+        import torch
+        torch.manual_seed(seed); torch.cuda.manual_seed_all(seed)
     except Exception:
         pass
-    if np is not None:
-        try:
-            np.random.seed(seed)
-        except Exception:
-            pass
-    if torch is not None:
-        try:
-            torch.manual_seed(seed)
-            torch.cuda.manual_seed_all(seed)
-            torch.backends.cudnn.deterministic = True  # type: ignore
-            torch.backends.cudnn.benchmark = False  # type: ignore
-        except Exception:
-            pass
 
-
-# -------------------------
-# Environment helpers
-# -------------------------
-
-def env_or(key: str, default: Optional[str] = None) -> Optional[str]:
-    """
-    Read environment variable with optional default.
-    """
-    val = os.getenv(key)
-    return val if (val is not None and val != "") else default
-
-
-# -------------------------
-# OpenAI-compatible client
-# -------------------------
-
+# -----------------------------------------------------------------------------
+# 配置结构
+# -----------------------------------------------------------------------------
 @dataclass
-class ClientConfig:
-    provider: str = "openai"        # "openai" | "deepseek" | "<oai-compatible>"
-    base_url: Optional[str] = None  # override if using a proxy or a self-hosted endpoint
-    api_key: Optional[str] = None   # if None, will read from env depending on provider
-    timeout: float = 60.0           # seconds
+class BackendConfig:
+    provider: str
+    api_key: str
+    base_url: Optional[str]
+    model: str
+    temperature: float
+    max_tokens: int
+    timeout: int
 
-def _default_api_key(provider: str) -> Optional[str]:
+# -----------------------------------------------------------------------------
+# 环境变量辅助
+# -----------------------------------------------------------------------------
+def _env(k: str, default: str = "") -> str:
+    v = os.getenv(k, default)
+    return (v or "").strip()
+
+def _env_opt(k: str) -> Optional[str]:
+    v = _env(k, "")
+    return v or None
+
+def _mask(key: str) -> str:
+    if not key:
+        return ""
+    return f"{'*' * max(0, len(key)-4)}{key[-4:]}"
+
+def _require_key(provider: str, key: str) -> None:
+    if key:
+        return
+    if provider == "openai":
+        raise RuntimeError(
+            "Missing API key for provider=openai. "
+            "Set OPENAI_API_KEY in your environment or in the .env file."
+        )
+    if provider == "deepseek":
+        raise RuntimeError(
+            "Missing API key for provider=deepseek. "
+            "Set DEEPSEEK_API_KEY in your environment or in the .env file."
+        )
+    raise RuntimeError("Missing API key.")
+
+# -----------------------------------------------------------------------------
+# 读取后端配置（支持 CLI 覆盖：见 run_ablation.apply_backend_overrides）
+# -----------------------------------------------------------------------------
+def _get_cfg(override_provider: Optional[str] = None,
+             override_model: Optional[str] = None) -> BackendConfig:
+    provider = (override_provider or _env("PROVIDER", "openai")).lower()
+    if provider not in {"openai", "deepseek"}:
+        raise ValueError(f"Unsupported PROVIDER: {provider}")
+
+    if provider == "openai":
+        cfg = BackendConfig(
+            provider="openai",
+            api_key=_env("OPENAI_API_KEY"),
+            base_url=_env_opt("OPENAI_BASE_URL"),  # e.g., https://api.laozhang.ai/v1
+            model=override_model or _env("OPENAI_MODEL", "gpt-4o-mini"),
+            temperature=float(_env("GEN_TEMPERATURE", "0.0")),
+            max_tokens=int(_env("GEN_MAX_TOKENS", "512")),
+            timeout=int(_env("REQUEST_TIMEOUT", "60")),
+        )
+    else:
+        cfg = BackendConfig(
+            provider="deepseek",
+            api_key=_env("DEEPSEEK_API_KEY"),
+            base_url=_env_opt("DEEPSEEK_BASE_URL") or "https://api.deepseek.com/v1",
+            model=override_model or _env("DEEPSEEK_MODEL", "deepseek-chat"),
+            temperature=float(_env("GEN_TEMPERATURE", "0.0")),
+            max_tokens=int(_env("GEN_MAX_TOKENS", "512")),
+            timeout=int(_env("REQUEST_TIMEOUT", "60")),
+        )
+
+    # 关键：在这里统一校验 API Key，报错更早更清晰
+    _require_key(cfg.provider, cfg.api_key)
+    return cfg
+
+# -----------------------------------------------------------------------------
+# 客户端构造（兼容旧函数名 get_oai_client）
+# -----------------------------------------------------------------------------
+def _make_client(cfg: BackendConfig) -> OpenAI:
+    # OpenAI SDK v1：OpenAI(api_key=..., base_url=...)
+    return OpenAI(api_key=cfg.api_key, base_url=cfg.base_url)
+
+# 向后兼容：一些旧代码可能直接调用 get_oai_client(cfg)
+def get_oai_client(cfg: Optional[BackendConfig] = None) -> OpenAI:
     """
-    Resolve API key from environment by provider.
+    Back-compat shim. If cfg is None, build one from env (provider=openai).
     """
-    p = (provider or "openai").lower()
-    if p == "openai":
-        return env_or("OPENAI_API_KEY")
-    if p == "deepseek":
-        return env_or("DEEPSEEK_API_KEY")
-    # generic fallback
-    return env_or("OPENAI_API_KEY") or env_or("API_KEY")
+    if cfg is None:
+        cfg = _get_cfg(override_provider="openai")
+    _require_key(cfg.provider, cfg.api_key)
+    return _make_client(cfg)
 
-
-def _default_base_url(provider: str, base_url: Optional[str]) -> Optional[str]:
-    """
-    Resolve base_url. If user provided, keep it; otherwise provide sensible default for some providers.
-    """
-    if base_url:
-        return base_url
-    p = (provider or "openai").lower()
-    if p == "deepseek":
-        # deepseek official endpoint is OpenAI-compatible:
-        return env_or("DEEPSEEK_BASE_URL", "https://api.deepseek.com")
-    # openai default: None -> SDK uses https://api.openai.com/v1
-    return None
-
-
-def get_oai_client(cfg: ClientConfig) -> OpenAI:
-    """
-    Return an OpenAI-compatible client. Raises if OpenAI SDK not available.
-    """
-    if OpenAI is None:
-        raise RuntimeError("openai python SDK not installed. Please `pip install openai>=1.0.0`")
-    api_key = cfg.api_key or _default_api_key(cfg.provider)
-    base_url = _default_base_url(cfg.provider, cfg.base_url)
-    if not api_key:
-        raise RuntimeError(f"Missing API key for provider={cfg.provider}. "
-                           f"Set OPENAI_API_KEY or DEEPSEEK_API_KEY accordingly.")
-    client = OpenAI(api_key=api_key, base_url=base_url, timeout=cfg.timeout)  # type: ignore
-    return client
-
-
-# -------------------------
-# Message builder
-# -------------------------
-
-def build_messages(
-    system: Optional[str],
-    user: Optional[str],
-    messages: Optional[List[Dict[str, str]]] = None
-) -> List[Dict[str, str]]:
-    """
-    Build an OpenAI-style messages list.
-    If `messages` is provided, it will be used as-is (but we still allow prepending a system message).
-    Otherwise, compose from `system` + `user`.
-    """
-    if messages is not None:
-        if system:
-            return [{"role": "system", "content": system}] + messages
-        return list(messages)
-    msgs: List[Dict[str, str]] = []
-    if system:
-        msgs.append({"role": "system", "content": system})
-    if user:
-        msgs.append({"role": "user", "content": user})
-    return msgs
-
-
-# -------------------------
-# Chat call with retries
-# -------------------------
-
-def _now_ms() -> int:
-    import time as _t
-    return int(_t.time() * 1000)
-
-
-def _sleep_backoff(attempt: int, base: float, jitter: float = 0.25) -> None:
-    """
-    Exponential backoff with jitter.
-    attempt: 0-based
-    """
-    import time as _t
-    delay = base * (2 ** attempt)
-    # jitter in [1 - jitter, 1 + jitter]
-    factor = 1.0 + random.uniform(-jitter, jitter)
-    _t.sleep(max(0.0, delay * factor))
-
-
-def _extract_text_from_response(resp: Any) -> str:
-    """
-    Support both Responses API and Chat Completions if needed.
-    Prefer chat.completions since most OAI-compatible vendors expose it.
-    """
-    try:
-        # OpenAI chat.completions
-        return resp.choices[0].message.content or ""
-    except Exception:
-        # Try "responses" api shape (rare in OAI-compatible vendors)
-        try:
-            return resp.output_text  # type: ignore
-        except Exception:
-            return ""
-
+# -----------------------------------------------------------------------------
+# 核心聊天调用
+# -----------------------------------------------------------------------------
+_MAX_RETRIES = 5
 
 def chat_once(
-    system: Optional[str],
-    user: Optional[str],
-    *,
-    provider: Optional[str] = "openai",
+    prompt: str,
+    system: Optional[str] = None,
     model: Optional[str] = None,
-    base_url: Optional[str] = None,
-    api_key: Optional[str] = None,
-    messages: Optional[List[Dict[str, str]]] = None,
-    temperature: float = 0.7,
+    temperature: Optional[float] = None,
     max_tokens: Optional[int] = None,
-    seed: Optional[int] = None,
-    timeout: float = 60.0,
-    retries: int = 3,
-    backoff_base: float = 0.8,
-    extra_headers: Optional[Dict[str, str]] = None,
-    tools: Optional[List[Dict[str, Any]]] = None,
-    tool_choice: Optional[Union[str, Dict[str, Any]]] = None,
-    # New:
-    model_override: Optional[str] = None,
-    return_meta: bool = False,
-) -> Union[str, Tuple[str, Dict[str, Any]]]:
+    provider: Optional[str] = None,
+    extra: Optional[Dict[str, Any]] = None,
+) -> str:
     """
-    Make a single chat request with retry/backoff.
-    If return_meta=True, returns (text, meta).
+    Single, non-streaming chat call. Defense text should go ONLY in `system`.
 
-    Meta dict includes:
-      - usage (prompt_tokens, completion_tokens, total_tokens) if available
-      - latency_ms
-      - model (effective)
-      - provider, base_url
-      - retry_count
+    Args:
+        prompt: user content
+        system: system content (用于 defense/override)
+        model: 覆盖使用的模型名（None 使用 env/默认）
+        provider: 覆盖后端（'openai' 或 'deepseek'）
+        extra: 透传到 client.chat.completions.create 的其它参数
     """
-    if seed is not None:
-        # Not all providers honor "seed", but we set it for those who do.
+    if model is not None and str(model).lower() == "auto":
+        model = None
+
+    cfg = _get_cfg(override_provider=provider, override_model=model)
+    client = _make_client(cfg)
+
+    messages: List[Dict[str, str]] = []
+    if system:
+        messages.append({"role": "system", "content": system})
+    messages.append({"role": "user", "content": prompt})
+
+    t = cfg.temperature if temperature is None else float(temperature)
+    mt = cfg.max_tokens if max_tokens is None else int(max_tokens)
+
+    for attempt in range(_MAX_RETRIES):
         try:
-            seed_everything(seed)
-        except Exception:
-            pass
-
-    eff_model = model_override or model
-    if not eff_model:
-        raise ValueError("chat_once: `model` is required (or pass `model_override`).")
-
-    cfg = ClientConfig(
-        provider=(provider or "openai"),
-        base_url=base_url,
-        api_key=api_key,
-        timeout=timeout,
-    )
-    client = get_oai_client(cfg)
-
-    msgs = build_messages(system=system, user=user, messages=messages)
-
-    last_err: Optional[Exception] = None
-    t0 = _now_ms()
-    attempt = 0
-    resp = None
-
-    while attempt <= retries:
-        try:
-            # OpenAI Chat Completions API
             resp = client.chat.completions.create(
-                model=eff_model,
-                messages=msgs,
-                temperature=temperature,
-                max_tokens=max_tokens,
-                seed=seed,
-                tools=tools,
-                tool_choice=tool_choice,
-                extra_headers=extra_headers,  # type: ignore
+                model=cfg.model,
+                messages=messages,
+                temperature=t,
+                max_tokens=mt,
+                **(extra or {}),
             )
-            break
-        except Exception as e:
-            last_err = e
-            if attempt >= retries:
-                LOGGER.error("chat_once failed after %d retries: %s", retries, repr(e))
+            return resp.choices[0].message.content or ""
+        except (RateLimitError, APIConnectionError, APIStatusError) as e:
+            if attempt == _MAX_RETRIES - 1:
+                # 向上抛出，让外层清晰看到是哪类错误
                 raise
-            _sleep_backoff(attempt, backoff_base)
-            attempt += 1
+            # 指数 + 抖动退避
+            time.sleep(1.0 + 0.8 * attempt + random.random())
+    return ""
 
-    t1 = _now_ms()
-    latency_ms = t1 - t0
-    text = _extract_text_from_response(resp)
-
-    # Usage extraction (best effort; schema varies a bit across vendors)
-    usage = None
-    try:
-        if hasattr(resp, "usage") and resp.usage is not None:
-            usage = {
-                "prompt_tokens": getattr(resp.usage, "prompt_tokens", None),
-                "completion_tokens": getattr(resp.usage, "completion_tokens", None),
-                "total_tokens": getattr(resp.usage, "total_tokens", None),
-            }
-    except Exception:
-        usage = None
-
-    if not return_meta:
-        return text
-
-    meta: Dict[str, Any] = {
-        "usage": usage,
-        "latency_ms": latency_ms,
-        "model": eff_model,
-        "provider": cfg.provider,
-        "base_url": _default_base_url(cfg.provider, cfg.base_url),
-        "retry_count": attempt,
+def chat_once_pair(
+    *,
+    system: Optional[str] = None,
+    user: str = "",
+    model_override: Optional[str] = None,
+    temperature: Optional[float] = None,
+    max_tokens: Optional[int] = None,
+    provider: Optional[str] = None,
+    extra: Optional[Dict[str, Any]] = None,
+) -> Tuple[str, Dict[str, Any]]:
+    """
+    兼容 X-Team 风格的 (text, meta) 返回；旧代码不依赖它，纯增量。
+    meta 至少包含 {"provider": ..., "model": ...}
+    """
+    text = chat_once(
+        prompt=user, system=system, model=model_override,
+        temperature=temperature, max_tokens=max_tokens,
+        provider=provider, extra=extra,
+    ) or ""
+    meta = {
+        "provider": (provider or (_env("PROVIDER", "openai"))).lower(),
+        "model": model_override or _env("OPENAI_MODEL" if (provider or _env("PROVIDER","openai")).lower()=="openai" else "DEEPSEEK_MODEL", ""),
     }
     return text, meta
 
-
-# -------------------------
-# Convenience wrappers
-# -------------------------
-
-def simple_chat(system: str, user: str, **kwargs) -> str:
-    """
-    Small convenience to keep older call sites readable.
-    """
-    return chat_once(system, user, **kwargs)  # type: ignore[return-value]
-
-
-def chat_with_meta(system: str, user: str, **kwargs) -> Tuple[str, Dict[str, Any]]:
-    """
-    Always return (text, meta).
-    """
-    kwargs["return_meta"] = True
-    return chat_once(system, user, **kwargs)  # type: ignore[return-value]
+# -----------------------------------------------------------------------------
+# 便捷打印当前后端（可选：调试时使用）
+# -----------------------------------------------------------------------------
+def debug_backend_banner() -> str:
+    prov = _env("PROVIDER", "openai").lower()
+    if prov == "openai":
+        key = _env("OPENAI_API_KEY")
+        base = _env_opt("OPENAI_BASE_URL") or "default"
+        model = _env("OPENAI_MODEL", "gpt-4o-mini")
+    else:
+        key = _env("DEEPSEEK_API_KEY")
+        base = _env_opt("DEEPSEEK_BASE_URL") or "https://api.deepseek.com/v1"
+        model = _env("DEEPSEEK_MODEL", "deepseek-chat")
+    return f"[Backend] provider={prov} model={model} base_url={base} key={_mask(key)}"

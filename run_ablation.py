@@ -1,438 +1,530 @@
 # run_ablation.py
-# -*- coding: utf-8 -*-
-"""
-Run ablation experiments.
-
-Supported modes:
-- turns : sweep over a list of max_turns values (e.g., 1..13)
-
-Key CLI examples (compatible with your previous runs):
-    python run_ablation.py --mode turns --turns $(seq 1 13) --n 60 --repeats 3 \
-      --defense none --adaptive --attack-gen --geo-style "authoritative, academic" \
-      --inj-mode none --provider openai --model gpt-4o --openai-base-url https://api.laozhang.ai/v1 \
-      --dataset data/cf_v2.jsonl --tag oai_full_turns_noinj_v1 --seed 7 \
-      --trace --trace-dir traces --trace-tag oai_full_turns_noinj_v1
-
-Optional X-Teaming plug-in:
-    --xteam on --plan-k 3 --rewrite-retries 1
-"""
-
-from __future__ import annotations
-
-import argparse
-import json
-import math
-import os
-import random
-import sys
+import argparse, csv, json, random, time, os, inspect
 from pathlib import Path
-from typing import Any, Dict, List, Optional, Sequence, Tuple
+from statistics import mean, pstdev
+from math import sqrt
+from typing import List, Dict, Optional, Any
 
-# --- ensure src/ is importable when running this script from repo root ---
-# (If you always use `python -m src.run_ablation`, you may remove this block.)
-if "src" not in {p.split(os.sep)[-1] for p in sys.path}:
-    sys.path.append(os.path.join(os.path.dirname(__file__), "src"))
-# ------------------------------------------------------------------------
+from src.utils import set_seed
+from src.datasets import load_counterfact_subset  # 仍保留作为 fallback
+from src.strategies import ORDER_DEFAULT
+from src.evaluate import evaluate_one
+from src.telemetry import TraceWriter  # telemetry
 
-from src.utils import seed_everything
-from src.orchestrate import crescendo_trial
-from src.telemetry import make_trace_writer, TraceWriter
-
+# 尝试加载（新版）crescendo_trial：若不存在，仍可走旧流程
+try:
+    from src.orchestrate import crescendo_trial as _CRESCENDO_TRIAL  # 新版才有的接口
+    _HAVE_CRESCENDO = True
+except Exception:
+    _CRESCENDO_TRIAL = None
+    _HAVE_CRESCENDO = False
 
 RESULTS_DIR = Path("results")
+RESULTS_DIR.mkdir(parents=True, exist_ok=True)
 
+# ---------- CI helpers ----------
+def wilson_ci(k: int, n: int, z: float = 1.96):
+    if n == 0:
+        return (0.0, 0.0, 0.0)
+    p = k / n
+    denom = 1 + z**2 / n
+    center = (p + z*z/(2*n)) / denom
+    margin = z * sqrt((p*(1-p) + z*z/(4*n)) / n) / denom
+    return (p, max(0.0, center - margin), min(1.0, center + margin))
 
-# ---------------------------------------------------------------------
-# I/O helpers
-# ---------------------------------------------------------------------
+def mean_ci(vals: List[float], z: float = 1.96):
+    if not vals:
+        return (0.0, 0.0, 0.0)
+    m = mean(vals)
+    sd = pstdev(vals) if len(vals) > 1 else 0.0
+    se = sd / sqrt(len(vals)) if len(vals) > 0 else 0.0
+    return (m, m - z*se, m + z*se)
 
-def ensure_dir(p: Path) -> None:
-    p.mkdir(parents=True, exist_ok=True)
+# ---------- IO ----------
+def write_csv(rows: List[Dict], path: Path, keys: List[str]):
+    path.parent.mkdir(parents=True, exist_ok=True)
+    with path.open("w", newline="", encoding="utf-8") as f:
+        w = csv.DictWriter(f, fieldnames=keys)
+        w.writeheader()
+        for r in rows:
+            w.writerow({k: r.get(k) for k in keys})
 
+def _dump_run_manifest(args: argparse.Namespace, run_meta: Dict[str, Any], tag: str):
+    """
+    额外写一份 run manifest（不影响旧流程）。
+    """
+    out = {
+        "cli_args": {k: getattr(args, k) for k in vars(args)},
+        "run_meta": run_meta,
+    }
+    path = RESULTS_DIR / f"run_manifest{tag or ''}.json"
+    with path.open("w", encoding="utf-8") as f:
+        json.dump(out, f, ensure_ascii=False, indent=2)
+    print("Saved manifest:", path)
 
-def read_jsonl(fp: Path) -> List[Dict[str, Any]]:
-    rows: List[Dict[str, Any]] = []
-    with fp.open("r", encoding="utf-8") as f:
-        for line in f:
-            line = line.strip()
-            if not line:
-                continue
-            try:
-                rows.append(json.loads(line))
-            except Exception:
-                continue
-    return rows
+def _dump_json_summary(summary_rows: List[Dict], sum_path_csv: Path):
+    """
+    同步存一份 JSON 版 summary，文件名与 CSV 相同仅后缀不同。
+    """
+    p = sum_path_csv.with_suffix(".json")
+    with p.open("w", encoding="utf-8") as f:
+        json.dump(summary_rows, f, ensure_ascii=False, indent=2)
+    print("Saved:", p)
 
+# ---------- Backend override from CLI (optional) ----------
+def apply_backend_overrides(args):
+    if getattr(args, "provider", None):
+        os.environ["PROVIDER"] = args.provider
+    if getattr(args, "model", None):
+        active = (os.environ.get("PROVIDER") or os.getenv("PROVIDER","openai")).lower()
+        if active == "openai":
+            os.environ["OPENAI_MODEL"] = args.model
+        elif active == "deepseek":
+            os.environ["DEEPSEEK_MODEL"] = args.model
+    if getattr(args, "openai_base_url", None):
+        os.environ["OPENAI_BASE_URL"] = args.openai_base_url
+    if getattr(args, "deepseek_base_url", None):
+        os.environ["DEEPSEEK_BASE_URL"] = args.deepseek_base_url
 
-def load_dataset(path: str | Path, categories: Optional[List[str]] = None) -> List[Dict[str, Any]]:
-    data = read_jsonl(Path(path))
-    if categories:
-        catset = set([c.strip().lower() for c in categories if c.strip()])
-        def _ok(d: Dict[str, Any]) -> bool:
-            cat = str(d.get("category", "")).lower()
-            return (cat in catset) if catset else True
-        data = [d for d in data if _ok(d)]
+    prov = os.getenv("PROVIDER", "openai").lower()
+    mdl = os.getenv("OPENAI_MODEL" if prov=="openai" else "DEEPSEEK_MODEL", "")
+    burl = os.getenv("OPENAI_BASE_URL" if prov=="openai" else "DEEPSEEK_BASE_URL", "")
+    print(f"[Backend] provider={prov} model={mdl} base_url={burl or 'default'}")
+
+# ---------- Robust dataset loader ----------
+def _resolve_path(maybe: str) -> Path:
+    p = Path(maybe)
+    if p.exists():
+        return p
+    root = Path(__file__).resolve().parent
+    for up in [root, root.parent, root.parent.parent]:
+        cand = up / maybe
+        if cand.exists():
+            return cand
+    return p
+
+def load_data_cli(n: int, dataset: Optional[str], categories: Optional[str], seed: int) -> List[Dict]:
+    random.seed(seed)
+    if dataset:
+        path = _resolve_path(dataset)
+        if not path.exists():
+            raise FileNotFoundError(f"Dataset not found: {dataset} -> tried {path}")
+        data: List[Dict] = []
+        with path.open("r", encoding="utf-8") as f:
+            for ln, line in enumerate(f, start=1):
+                line = line.strip()
+                if not line:
+                    continue
+                try:
+                    ex = json.loads(line)
+                except Exception:
+                    continue
+                ex["_src_path"] = str(path.resolve())
+                ex["_src_line"] = ln
+                data.append(ex)
+        if categories:
+            cats = {c.strip() for c in categories.split(",") if c.strip()}
+            data = [ex for ex in data if ex.get("category") in cats]
+        random.shuffle(data)
+        if n and n > 0:
+            data = data[:min(n, len(data))]
+        print(f"[Data] Loaded {len(data)} examples from {path.name}"
+              + (f" (categories={categories})" if categories else ""))
+        return data
+    data = load_counterfact_subset(n=n)
+    for i, ex in enumerate(data, start=1):
+        ex.setdefault("_src_path", "builtin:load_counterfact_subset")
+        ex.setdefault("_src_line", i)
+    print(f"[Data] Loaded {len(data)} examples from builtin subset")
     return data
 
-
-def sample_data(data: List[Dict[str, Any]], n: int, seed: Optional[int]) -> List[Dict[str, Any]]:
-    if n <= 0 or n >= len(data):
-        return list(data)
-    rng = random.Random(seed)
-    idx = list(range(len(data)))
-    rng.shuffle(idx)
-    pick = idx[:n]
-    return [data[i] for i in pick]
-
-
-def write_csv(rows: List[Dict[str, Any]], out_path: Path, keys: Sequence[str]) -> None:
-    ensure_dir(out_path.parent)
-    with out_path.open("w", encoding="utf-8") as f:
-        f.write(",".join(keys) + "\n")
-        for r in rows:
-            vals: List[str] = []
-            for k in keys:
-                v = r.get(k, "")
-                s = str(v).replace("\n", " ").replace("\r", " ").replace(",", " ")
-                vals.append(s)
-            f.write(",".join(vals) + "\n")
-
-
-# ---------------------------------------------------------------------
-# Metrics
-# ---------------------------------------------------------------------
-
-def mean_confidence_interval(p: float, n: int, z: float = 1.96) -> Tuple[float, float]:
-    """Normal approximation 95% CI for a proportion."""
-    if n <= 0:
-        return (0.0, 0.0)
-    se = math.sqrt(max(1e-12, p * (1 - p) / n))
-    lo = max(0.0, p - z * se)
-    hi = min(1.0, p + z * se)
-    return lo, hi
-
-
-def summarize_rows(rows: List[Dict[str, Any]]) -> Dict[str, Any]:
-    n = len(rows)
-    psr = sum(1 for r in rows if int(r.get("PSR", 0)) == 1) / n if n > 0 else 0.0
-    psr_lo, psr_hi = mean_confidence_interval(psr, n)
-
-    def psr_at(k: int) -> float:
-        if n == 0:
-            return 0.0
-        cnt = 0
-        for r in rows:
-            fh = r.get("first_hit_turn")
-            try:
-                fh_i = int(fh) if fh is not None else None
-            except Exception:
-                fh_i = None
-            if fh_i is not None and fh_i <= k:
-                cnt += 1
-        return cnt / n
-
-    first_hits = []
-    for r in rows:
-        fh = r.get("first_hit_turn")
-        if fh is None:
-            continue
-        if isinstance(fh, str):
-            fh = fh.strip()
-            if fh == "":
-                continue
+# ---------- Helpers ----------
+def _call_crescendo(example: Dict, **kwargs) -> Dict:
+    """
+    调用新版 orchestrator.crescendo_trial（若存在），并做参数签名过滤，避免破坏兼容性。
+    返回标准 dict：{"hit": bool, "first_hit_turn": int|None}
+    """
+    if not _HAVE_CRESCENDO or _CRESCENDO_TRIAL is None:
+        raise RuntimeError("crescendo_trial not available")
+    sig = inspect.signature(_CRESCENDO_TRIAL)
+    filt = {k: v for k, v in kwargs.items() if k in sig.parameters}
+    # 兼容不同版本首参名(example/ex)
+    try:
+        res = _CRESCENDO_TRIAL(example, **filt)
+    except TypeError:
+        res = _CRESCENDO_TRIAL(ex=example, **filt)
+    # 结果归一化
+    if isinstance(res, dict):
+        hit = bool(res.get("hit"))
+        fht = res.get("first_hit_turn")
         try:
-            first_hits.append(int(fh))
-        except (ValueError, TypeError):
-            continue
-    avg_first = sum(first_hits) / len(first_hits) if first_hits else None
+            fht = int(fht) if fht is not None and fht != "" else None
+        except Exception:
+            fht = None
+        return {"hit": hit, "first_hit_turn": fht}
+    # 老版可能返回 (success, history)
+    if isinstance(res, tuple) and len(res) >= 1:
+        return {"hit": bool(res[0]), "first_hit_turn": None}
+    return {"hit": False, "first_hit_turn": None}
 
-
-    out: Dict[str, Any] = {
-        "N_total": n,
-        "PSR_mean": round(psr, 6),
-        "PSR_lo": round(psr_lo, 6),
-        "PSR_hi": round(psr_hi, 6),
-        "PSR@1": round(psr_at(1), 6),
-        "PSR@2": round(psr_at(2), 6),
-        "PSR@3": round(psr_at(3), 6),
-        "first_hit_mean": (round(avg_first, 6) if avg_first is not None else ""),
-    }
-    return out
-
-
-# ---------------------------------------------------------------------
-# Core runner
-# ---------------------------------------------------------------------
-
-def eval_one_setting(
-    *,
-    data: List[Dict[str, Any]],
-    provider: str,
-    model: str,
-    base_url: Optional[str],
-    defense: str,
-    inj_mode: str,
-    inj_strength: int,
-    turns: int,
-    adaptive: bool,
-    attack_gen: bool,
-    geo_style: str,
-    sleep: float,
-    seed: Optional[int],
-    tracer: Optional[TraceWriter],
-    run_meta: Optional[Dict[str, Any]],
-    # X-Teaming:
-    xteam_on: bool,
-    plan_k: int,
-    rewrite_retries: int,
-) -> List[Dict[str, Any]]:
-    """
-    Evaluate a dataset under a single (max_turns, defense, inj, etc.) configuration.
-    Returns per-example rows.
-    """
-    rows: List[Dict[str, Any]] = []
-    for i, ex in enumerate(data):
-        res = crescendo_trial(
-            ex,
-            provider=provider,
-            model=model,
-            base_url=base_url,
-            defense=defense,
-            inj_mode=inj_mode,
-            inj_strength=inj_strength,
-            max_turns=turns,
-            adaptive=adaptive,
-            attack_gen=attack_gen,
-            geo_style=geo_style,
-            tracer=tracer,
-            run_meta=run_meta,
-            seed=seed,
-            sleep=sleep,
-            # X-Teaming
-            xteam_on=xteam_on,
-            plan_k=plan_k,
-            rewrite_retries=rewrite_retries,
-        )
-        row = {
-            "id": i,
-            "subject": ex.get("subject", ""),
-            "relation": ex.get("relation", ""),
-            "defense": defense,
-            "inj_mode": inj_mode,
-            "inj_strength": inj_strength,
-            "max_turns": turns,
-            "PSR": 1 if res.get("hit") else 0,
-            "first_hit_turn": res.get("first_hit_turn"),
-        }
-        rows.append(row)
+# ---------- Core eval (LEGACY path = evaluate_one) ----------
+def eval_config_legacy(
+    data, strat_seq, defense, max_turns,
+    sleep=0.10, adaptive=False,
+    attack_gen=False, geo_style="warm, confident",
+    inj_mode="none", inj_strength=2,
+    tracer=None, run_meta=None,
+    skip_errors: bool = False,
+):
+    rows=[]
+    for i, ex in enumerate(data, 1):
+        try:
+            ex_meta = dict(run_meta or {})
+            ex_meta.update({
+                "example_src_path": ex.get("_src_path", ""),
+                "example_src_line": ex.get("_src_line", None),
+            })
+            res = evaluate_one(
+                ex, strat_seq=strat_seq, defense=defense, max_turns=max_turns,
+                adaptive=adaptive, attack_gen=attack_gen, geo_style=geo_style,
+                inj_mode=inj_mode, inj_strength=inj_strength,
+                tracer=tracer, run_meta=ex_meta
+            )
+            res.update({"id": i, "subject": ex.get("subject"), "relation": ex.get("relation")})
+            rows.append(res)
+            print(f"[legacy|{defense or 'none'}] turns={max_turns:>2}  PSR={res['PSR']}  RA={res['RA']}  Loc={res['LocAcc']:.3f}")
+            time.sleep(sleep)
+        except Exception as e:
+            if not skip_errors:
+                raise
+            print(f"[legacy] example#{i} error: {e}  -> skipped")
     return rows
 
+# ---------- Core eval (XTEAM path = crescendo_trial) ----------
+def eval_config_xteam(
+    data, strat_seq, defense, max_turns,
+    sleep=0.10, adaptive=False,
+    attack_gen=False, geo_style="warm, confident",
+    inj_mode="none", inj_strength=2,
+    tracer=None, run_meta=None,
+    # xteam extras
+    provider="openai", model="", base_url=None,
+    xteam_on=True, plan_k=2, rewrite_retries=1, seed=0,
+    skip_errors: bool = False,
+):
+    rows=[]
+    base_url = base_url or (os.getenv("OPENAI_BASE_URL") or os.getenv("DEEPSEEK_BASE_URL") or None)
+    for i, ex in enumerate(data, 1):
+        try:
+            # 调用新版 orchestrator（若可用），否则自动回退到旧逻辑
+            try:
+                res = _call_crescendo(
+                    example=ex,
+                    provider=provider,
+                    model=model,
+                    base_url=base_url,
+                    defense=defense,
+                    inj_mode=inj_mode,
+                    inj_strength=inj_strength,
+                    max_turns=max_turns,
+                    adaptive=adaptive,
+                    attack_gen=attack_gen,
+                    geo_style=geo_style,
+                    tracer=tracer,
+                    run_meta=run_meta,
+                    seed=seed,
+                    sleep=sleep,
+                    xteam_on=xteam_on,
+                    plan_k=plan_k,
+                    rewrite_retries=rewrite_retries,
+                    strat_seq=strat_seq,  # 若新版不接受该参，会被签名过滤
+                )
+                hit = bool(res.get("hit"))
+            except Exception as e:
+                # 万一新版不存在/失败，回退到旧 evaluate_one，保证“不影响旧流程”
+                print(f"[xteam->fallback] error={e}; fallback to legacy evaluate_one")
+                return eval_config_legacy(
+                    data, strat_seq, defense, max_turns,
+                    sleep=sleep, adaptive=adaptive, attack_gen=attack_gen,
+                    geo_style=geo_style, inj_mode=inj_mode, inj_strength=inj_strength,
+                    tracer=tracer, run_meta=run_meta,
+                )
 
-# ---------------------------------------------------------------------
-# CLI
-# ---------------------------------------------------------------------
+            # 维持旧的输出 schema：PSR/RA/LocAcc（后两者占位）
+            row = {
+                "id": i,
+                "subject": ex.get("subject"),
+                "relation": ex.get("relation"),
+                "PSR": 1 if hit else 0,
+                "RA": 0,           # 无法从新版直接计算，留 0 占位（对比主要看 PSR）
+                "LocAcc": 0.0,     # 同上
+                "max_turns": max_turns,
+            }
+            rows.append(row)
+            print(f"[xteam|{defense or 'none'}] turns={max_turns:>2}  PSR={row['PSR']}  RA={row['RA']}  Loc={row['LocAcc']:.3f}")
+            time.sleep(sleep)
+        except Exception as e:
+            if not skip_errors:
+                raise
+            print(f"[xteam] example#{i} error: {e}  -> skipped")
+    return rows
 
-def parse_args(argv: Optional[Sequence[str]] = None) -> argparse.Namespace:
-    ap = argparse.ArgumentParser("run_ablation", formatter_class=argparse.ArgumentDefaultsHelpFormatter)
+def summarize_rows(rows: List[Dict]):
+    n = len(rows)
+    k_psr = sum(int(r["PSR"]) for r in rows)
+    k_ra  = sum(int(r["RA"])  for r in rows)
+    loc_list = [float(r["LocAcc"]) for r in rows]
+    psr_m, psr_lo, psr_hi = wilson_ci(k_psr, n)
+    ra_m,  ra_lo,  ra_hi  = wilson_ci(k_ra, n)
+    loc_m, loc_lo, loc_hi = mean_ci(loc_list)
+    return {
+        "N": n,
+        "PSR_mean": psr_m, "PSR_lo": psr_lo, "PSR_hi": psr_hi,
+        "RA_mean":  ra_m,  "RA_lo":  ra_lo,  "RA_hi":  ra_hi,
+        "Loc_mean": loc_m, "Loc_lo": loc_lo, "Loc_hi":  loc_hi,
+    }
 
-    # Experiment topology
-    ap.add_argument("--mode", choices=["turns", "order"], default="turns",
-                    help="ablation mode; 'order' is reserved for future use.")
-    ap.add_argument("--turns", nargs="+", type=int, default=[1, 2, 3, 5, 13],
-                    help="list of max_turns for mode=turns")
-    ap.add_argument("--n", type=int, default=60, help="number of samples per condition")
-    ap.add_argument("--repeats", type=int, default=1, help="how many times to repeat each condition")
-    ap.add_argument("--seed", type=int, default=7, help="base random seed")
+def _apply_turns_preset(args):
+    if args.turns_preset == "log8":
+        args.turns = [1, 2, 3, 4, 6, 8, 10, 13]
+        print("[Preset] turns=log8 ->", args.turns)
+    elif args.turns_preset == "dense13":
+        args.turns = list(range(1, 14))
+        print("[Preset] turns=dense13 ->", args.turns)
 
-    # Behavior toggles
-    ap.add_argument("--defense", type=str, default="none", help="none | override | <custom text>")
-    ap.add_argument("--adaptive", action="store_true", help="enable adaptive review across turns")
-    ap.add_argument("--attack-gen", action="store_true", help="use LLM copywriter; else fallback templates")
-    ap.add_argument("--geo-style", type=str, default="authoritative, academic")
+def _apply_suite_shortcut(args):
+    if not args.suite:
+        return
+    if args.suite == "baseline":
+        args.xteam = "off"
+        # 其他参数保留用户显式设置
+    elif args.suite == "xteam":
+        args.xteam = "on"
+        args.plan_k = 2
+        args.rewrite_retries = 0
+    elif args.suite == "xteampp":
+        args.xteam = "on"
+        args.plan_k = 2
+        args.rewrite_retries = 1
+    print(f"[Suite] Applied suite={args.suite} -> xteam={args.xteam}, plan_k={args.plan_k}, rewrite_retries={args.rewrite_retries}")
 
-    # Injection
-    ap.add_argument("--inj-mode", choices=["none", "repeat", "reference", "target"], default="none")
-    ap.add_argument("--inj-strength", type=int, default=1)
-
-    # LLM routing
-    ap.add_argument("--provider", choices=["openai", "deepseek", "oai"], default="openai")
-    ap.add_argument("--model", type=str, required=True)
+# ---------- CLI ----------
+def main():
+    ap = argparse.ArgumentParser()
+    ap.add_argument("--n", type=int, default=50, help="number of examples per repeat")
+    ap.add_argument("--seed", type=int, default=1337)
+    ap.add_argument("--repeats", type=int, default=3)
+    ap.add_argument("--mode", choices=["turns","order"], default="turns")
+    ap.add_argument("--defense", choices=["none","override","prefilter"], default="none")
+    ap.add_argument("--turns", type=int, nargs="+", default=[1,2,4,6], help="for mode=turns")
+    ap.add_argument("--turns-preset", choices=["log8","dense13"], default=None, help="Quick set for --turns.")
+    ap.add_argument("--shuffles", type=int, default=10, help="for mode=order")
+    # Backend (optional)
+    ap.add_argument("--provider", choices=["openai","deepseek"], default=None)
+    ap.add_argument("--model", type=str, default=None)
     ap.add_argument("--openai-base-url", type=str, default=None)
     ap.add_argument("--deepseek-base-url", type=str, default=None)
-    ap.add_argument("--base-url", type=str, default=None, help="generic base_url override (highest priority)")
-    ap.add_argument("--sleep", type=float, default=0.0, help="sleep seconds between turns")
+    # Phase 1 toggles
+    ap.add_argument("--adaptive", action="store_true", help="Rule-based adaptive orchestration.")
+    ap.add_argument("--attack-gen", action="store_true",
+                    help="Use Attack-LLM to generate persuader blurbs instead of fixed templates.")
+    ap.add_argument("--geo-style", type=str, default="warm, confident",
+                    help="GEO: writing style for Attack-LLM (e.g., 'assertive, academic').")
+    ap.add_argument("--inj-mode", choices=["none","repeat","reference","target"], default="none",
+                help="Prompt injection mode to counter Override (add 'target' to force a specific value).")
+    ap.add_argument("--inj-strength", type=int, default=2,
+                    help="How many times to repeat the injection phrase (>=1).")
+    # X-Team（新增，默认 off；旧流程不受影响）
+    ap.add_argument("--xteam", choices=["off","on"], default="off",
+                    help="Turn on X-Teaming pipeline if available; otherwise fallback to legacy.")
+    ap.add_argument("--plan-k", type=int, default=2, help="Number of X-Team plans (if xteam=on).")
+    ap.add_argument("--rewrite-retries", type=int, default=1, help="Rewrite attempts (if xteam=on).")
+    ap.add_argument("--suite", choices=["baseline","xteam","xteampp"], default=None,
+                    help="Shortcut: baseline=legacy; xteam=on + rewrite=0; xteampp=on + rewrite=1.")
+    # Parallel-friendly
+    ap.add_argument("--tag", type=str, default=None,
+                    help="Suffix tag appended to output filenames to avoid collisions in parallel runs.")
+    ap.add_argument("--sleep", type=float, default=0.10,
+                    help="Sleep seconds between API calls to reduce rate limits in parallel.")
+    ap.add_argument("--skip-errors", action="store_true",
+                    help="Skip per-example errors instead of aborting the run.")
     # Dataset
-    ap.add_argument("--dataset", type=str, required=True)
-    ap.add_argument("--categories", nargs="*", default=None)
+    ap.add_argument("--dataset", type=str, default=None,
+                    help="Path to a JSONL dataset.")
+    ap.add_argument("--categories", type=str, default=None,
+                    help="Comma-separated category filter, e.g. 'geo_capital,brand_origin'")
+    # Telemetry
+    ap.add_argument("--trace", action="store_true",
+                    help="Write per-turn JSONL traces (inputs/outputs) for debugging.")
+    ap.add_argument("--trace-dir", type=str, default="traces",
+                    help="Directory to store JSONL traces.")
+    ap.add_argument("--trace-tag", type=str, default=None,
+                    help="Optional tag used in trace filename.")
 
-    # Tracing / results
-    ap.add_argument("--trace", action="store_true")
-    ap.add_argument("--trace-dir", type=str, default="traces")
-    ap.add_argument("--trace-tag", type=str, default=None)
-    ap.add_argument("--tag", type=str, default=None, help="label for result filenames")
+    args = ap.parse_args()
 
-    # X-Teaming (optional)
-    ap.add_argument("--xteam", choices=["off", "on"], default="off")
-    ap.add_argument("--plan-k", type=int, default=2)
-    ap.add_argument("--rewrite-retries", type=int, default=1)
+    # 便捷预设（不改变原默认行为；仅用户显式指定时生效）
+    _apply_turns_preset(args)
+    _apply_suite_shortcut(args)
 
-    return ap.parse_args(argv)
+    apply_backend_overrides(args)
 
+    # ---- Build run_meta FIRST, then create tracer with it ----
+    prov = os.getenv("PROVIDER", "openai")
+    mdl  = os.getenv("OPENAI_MODEL" if prov=="openai" else "DEEPSEEK_MODEL", "")
+    burl = os.getenv("OPENAI_BASE_URL" if prov=="openai" else "DEEPSEEK_BASE_URL", "")
+    run_meta = {
+        "provider": prov,
+        "model": mdl,
+        "base_url": burl or "default",
+        "defense": args.defense,
+        "mode": args.mode,
+        "adaptive": args.adaptive,
+        "attack_gen": args.attack_gen,
+        "geo_style": args.geo_style,
+        "inj_mode": args.inj_mode,
+        "inj_strength": args.inj_strength,
+        "tag": args.tag,
+        "dataset": args.dataset,
+        "categories": args.categories,
+        # 记录 xteam 配置（即便旧流程也会写入）
+        "xteam": args.xteam,
+        "plan_k": args.plan_k,
+        "rewrite_retries": args.rewrite_retries,
+        # 额外记录
+        "suite": args.suite,
+        "turns_effective": args.turns,
+        "skip_errors": args.skip_errors,
+    }
 
-def resolve_base_url(args: argparse.Namespace) -> Optional[str]:
-    if args.base_url:
-        return args.base_url
-    if args.provider == "openai":
-        return args.openai_base_url
-    if args.provider == "deepseek":
-        return args.deepseek_base_url
-    return None
+    tracer = TraceWriter(args.trace_dir, tag=(args.trace_tag or args.tag), run_meta=run_meta) if args.trace else None
+    if tracer:
+        tracer.write_run_header(extra={"_stage": "orchestrator_init"})
 
+    use_xteam = (args.xteam == "on")
+    if use_xteam and not _HAVE_CRESCENDO:
+        print("[warn] xteam=on but crescendo_trial not found. Falling back to legacy evaluate_one.")
 
-def main(argv: Optional[Sequence[str]] = None) -> None:
-    args = parse_args(argv)
+    defense_arg = None if args.defense=="none" else args.defense
+    summaries_print = []
+    tag = f"_{args.tag}" if args.tag else ""
 
-    # Seed global libs
-    seed_everything(args.seed)
+    try:
+        if args.mode == "turns":
+            summary_rows = []
+            for t in args.turns:
+                all_rows = []
+                for r in range(args.repeats):
+                    seed_r = args.seed + r
+                    set_seed(seed_r)
+                    data = load_data_cli(n=args.n, dataset=args.dataset, categories=args.categories, seed=seed_r)
 
-    # Prepare results dir
-    ensure_dir(RESULTS_DIR)
+                    if use_xteam and _HAVE_CRESCENDO:
+                        rows = eval_config_xteam(
+                            data, ORDER_DEFAULT, defense_arg, max_turns=t,
+                            adaptive=args.adaptive, attack_gen=args.attack_gen, geo_style=args.geo_style,
+                            inj_mode=args.inj_mode, inj_strength=args.inj_strength,
+                            sleep=args.sleep, tracer=tracer, run_meta=run_meta,
+                            provider=prov, model=mdl, base_url=burl or None,
+                            xteam_on=True, plan_k=args.plan_k, rewrite_retries=args.rewrite_retries, seed=seed_r,
+                            skip_errors=args.skip_errors,
+                        )
+                    else:
+                        rows = eval_config_legacy(
+                            data, ORDER_DEFAULT, defense_arg, max_turns=t,
+                            adaptive=args.adaptive, attack_gen=args.attack_gen, geo_style=args.geo_style,
+                            inj_mode=args.inj_mode, inj_strength=args.inj_strength,
+                            sleep=args.sleep, tracer=tracer, run_meta=run_meta,
+                            skip_errors=args.skip_errors,
+                        )
 
-    # Load dataset and sample
-    data_all = load_dataset(args.dataset, categories=args.categories)
-    if not data_all:
-        print(f"[ERR] No data loaded from {args.dataset}", file=sys.stderr)
-        sys.exit(2)
+                    out = RESULTS_DIR / f"abl_turns_{args.defense}{tag}_{t}_seed{seed_r}.csv"
+                    write_csv(rows, out, keys=["id","subject","relation","PSR","RA","LocAcc","max_turns"])
+                    all_rows.extend(rows)
 
-    # Repeats loop
-    all_summary_rows: List[Dict[str, Any]] = []
-    for r in range(args.repeats):
-        seed_r = (args.seed or 0) + r
-        data = sample_data(data_all, n=args.n, seed=seed_r)
+                s = summarize_rows(all_rows)
+                s.update({"mode":"turns","defense":args.defense,"max_turns":t,"N_total": s.pop("N")})
+                summary_rows.append(s)
+                summaries_print.append(s)
 
-        # Sweep turns
-        for T in args.turns:
-            label = args.tag or "ablation"
-            label_full = f"{label}_t{T}_seed{seed_r}"
-            base_url = resolve_base_url(args)
+            sum_path = RESULTS_DIR / f"summary_turns_{args.defense}{tag}.csv"
+            write_csv(summary_rows, sum_path,
+                      keys=["mode","defense","max_turns","N_total",
+                            "PSR_mean","PSR_lo","PSR_hi",
+                            "RA_mean","RA_lo","RA_hi",
+                            "Loc_mean","Loc_lo","Loc_hi"])
+            print("\nSaved:", sum_path)
+            _dump_json_summary(summary_rows, sum_path)
 
-            # Trace
-            tracer: Optional[TraceWriter] = None
-            if args.trace:
-                run_meta = {
-                    "mode": args.mode,
-                    "dataset": args.dataset,
-                    "categories": args.categories,
-                    "n": len(data),
-                    "seed": seed_r,
-                    "provider": args.provider,
-                    "model": args.model,
-                    "base_url": base_url or "default",
-                    "defense": args.defense,
-                    "inj_mode": args.inj_mode,
-                    "inj_strength": args.inj_strength,
-                    "turns": T,
-                    "adaptive": bool(args.adaptive),
-                    "attack_gen": bool(args.attack_gen),
-                    "geo_style": args.geo_style,
-                    "xteam": args.xteam,
-                    "plan_k": args.plan_k,
-                    "rewrite_retries": args.rewrite_retries,
-                    "tag": label_full,
-                }
-                trace_tag = args.trace_tag or label
-                tracer = make_trace_writer(
-                    enabled=True,
-                    trace_dir=args.trace_dir,
-                    tag=f"{trace_tag}_t{T}_seed{seed_r}",
-                    run_meta=run_meta
-                )
-            else:
-                run_meta = {
-                    "mode": args.mode, "dataset": args.dataset, "n": len(data),
-                    "seed": seed_r, "tag": label_full
-                }
+        else:  # mode == order
+            summary_rows = []
+            for k in range(args.shuffles):
+                all_rows = []
+                for r in range(args.repeats):
+                    seed_r = args.seed + 1000*k + r
+                    set_seed(seed_r)
+                    data = load_data_cli(n=args.n, dataset=args.dataset, categories=args.categories, seed=seed_r)
+                    seq = ORDER_DEFAULT[:]
+                    random.shuffle(seq)
 
-            # Evaluate one setting
-            rows = eval_one_setting(
-                data=data,
-                provider=args.provider,
-                model=args.model,
-                base_url=base_url,
-                defense=args.defense,
-                inj_mode=args.inj_mode,
-                inj_strength=args.inj_strength,
-                turns=T,
-                adaptive=bool(args.adaptive),
-                attack_gen=bool(args.attack_gen),
-                geo_style=args.geo_style,
-                sleep=float(args.sleep or 0.0),
-                seed=seed_r,
-                tracer=tracer,
-                run_meta=run_meta,
-                xteam_on=(args.xteam == "on"),
-                plan_k=int(args.plan_k),
-                rewrite_retries=int(args.rewrite_retries),
-            )
+                    if use_xteam and _HAVE_CRESCENDO:
+                        rows = eval_config_xteam(
+                            data, seq, defense_arg, max_turns=4,
+                            adaptive=args.adaptive, attack_gen=args.attack_gen, geo_style=args.geo_style,
+                            inj_mode=args.inj_mode, inj_strength=args.inj_strength,
+                            sleep=args.sleep, tracer=tracer, run_meta=run_meta,
+                            provider=prov, model=mdl, base_url=burl or None,
+                            xteam_on=True, plan_k=args.plan_k, rewrite_retries=args.rewrite_retries, seed=seed_r,
+                            skip_errors=args.skip_errors,
+                        )
+                    else:
+                        rows = eval_config_legacy(
+                            data, seq, defense_arg, max_turns=4,
+                            adaptive=args.adaptive, attack_gen=args.attack_gen, geo_style=args.geo_style,
+                            inj_mode=args.inj_mode, inj_strength=args.inj_strength,
+                            sleep=args.sleep, tracer=tracer, run_meta=run_meta,
+                            skip_errors=args.skip_errors,
+                        )
 
-            # Per-run CSV
-            out_file = RESULTS_DIR / f"{label_full}.csv"
-            write_csv(
-                rows,
-                out_file,
-                keys=[
-                    "id", "subject", "relation", "defense",
-                    "inj_mode", "inj_strength", "max_turns",
-                    "PSR", "first_hit_turn"
-                ],
-            )
+                    out = RESULTS_DIR / f"abl_order_{args.defense}{tag}_s{k}_seed{seed_r}.csv"
+                    write_csv(rows, out, keys=["id","subject","relation","PSR","RA","LocAcc","max_turns"])
+                    all_rows.extend(rows)
 
-            # Summary
-            summ = summarize_rows(rows)
-            summ_enriched = {
-                "mode": args.mode,
-                "provider": args.provider,
-                "model": args.model,
-                "defense": args.defense,
-                "inj_mode": args.inj_mode,
-                "inj_strength": args.inj_strength,
-                "max_turns": T,
-                "adaptive": int(bool(args.adaptive)),
-                "attack_gen": int(bool(args.attack_gen)),
-                "xteam": args.xteam,
-                "plan_k": args.plan_k,
-                "rewrite_retries": args.rewrite_retries,
-                "tag": label_full,
-                **summ,
-            }
-            all_summary_rows.append(summ_enriched)
+                s = summarize_rows(all_rows)
+                s.update({"mode":"order","defense":args.defense,"shuffle":k,"N_total": s.pop("N")})
+                summary_rows.append(s)
+                summaries_print.append(s)
 
-            # Write summary per setting
-            sum_file = RESULTS_DIR / f"summary_{label_full}.csv"
-            write_csv([summ_enriched], sum_file, keys=list(summ_enriched.keys()))
+            sum_path = RESULTS_DIR / f"summary_order_{args.defense}{tag}.csv"
+            write_csv(summary_rows, sum_path,
+                      keys=["mode","defense","shuffle","N_total",
+                            "PSR_mean","PSR_lo","PSR_hi",
+                            "RA_mean","RA_lo","RA_hi",
+                            "Loc_mean","Loc_lo","Loc_hi"])
+            print("\nSaved:", sum_path)
+            _dump_json_summary(summary_rows, sum_path)
 
-            if tracer is not None:
-                tracer.write_run_end()
-                tracer.close()
+    finally:
+        if tracer is not None:
+            tracer.write_run_end()
+            tracer.close()
+        # 额外写一份 manifest（不影响旧流程）
+        _dump_run_manifest(args, run_meta, tag)
 
-    # Global aggregate across T
-    by_T: Dict[int, List[Dict[str, Any]]] = {}
-    for s in all_summary_rows:
-        T = int(s["max_turns"])
-        by_T.setdefault(T, []).append(s)
-
-    agg_rows: List[Dict[str, Any]] = []
-    for T, arr in sorted(by_T.items()):
-        N = len(arr)
-        psr_vals = [float(x["PSR_mean"]) for x in arr]
-        psr_avg = sum(psr_vals) / N if N else 0.0
-        agg = {"max_turns": T, "repeats": N, "PSR_mean_avg": round(psr_avg, 6)}
-        agg_rows.append(agg)
-
-    if agg_rows:
-        out_agg = RESULTS_DIR / f"aggregate_{args.tag or 'ablation'}.csv"
-        write_csv(agg_rows, out_agg, keys=["max_turns", "repeats", "PSR_mean_avg"])
-
+    print("\n=== SUMMARY (95% CI) ===")
+    for s in summaries_print:
+        if s["mode"]=="turns":
+            print(f"[{s['defense']}] turns={s['max_turns']:>2}  "
+                  f"N={s['N_total']:<4}  "
+                  f"PSR={s['PSR_mean']*100:5.1f}% ({s['PSR_lo']*100:4.1f}–{s['PSR_hi']*100:4.1f})  "
+                  f"RA={s['RA_mean']*100:4.1f}%  "
+                  f"Loc={s['Loc_mean']:.3f}")
+        else:
+            print(f"[{s['defense']}] shuffle={s['shuffle']:>2}  "
+                  f"N={s['N_total']:<4}  "
+                  f"PSR={s['PSR_mean']*100:5.1f}% ({s['PSR_lo']*100:4.1f}–{s['PSR_hi']*100:4.1f})  "
+                  f"RA={s['RA_mean']*100:4.1f}%  "
+                  f"Loc={s['Loc_mean']:.3f}")
 
 if __name__ == "__main__":
     main()

@@ -7,6 +7,10 @@ Lightweight JSONL tracer for experiments.
 - Adds optional fields for X-Teaming and cost tracking:
   plans, draft_scores, chosen_idx, diagnosis, rewrite_used, usage, latency_ms.
 - Safe to disable (enabled=False) -> methods become no-ops.
+- NEW:
+  * autostart: automatically writes a 'run_start' header on init (default True)
+  * log(): backward-compat alias for ad-hoc dict logging (keeps old code working)
+  * robust file naming + thread-safe appends
 """
 
 from __future__ import annotations
@@ -17,7 +21,7 @@ import logging
 from dataclasses import dataclass, field
 from pathlib import Path
 from threading import Lock
-from typing import Any, Dict, Optional
+from typing import Any, Dict, Optional, Union
 
 LOGGER = logging.getLogger("telemetry")
 if not LOGGER.handlers:
@@ -42,8 +46,8 @@ class TraceWriter:
     JSONL trace writer.
 
     Typical usage:
-        tw = TraceWriter(trace_dir="traces", tag="oai_full_turns_noinj_v1", enabled=True, run_meta={...})
-        tw.write_run_header()
+        tw = TraceWriter(trace_dir="traces", tag="oai_full_turns_noinj_v1",
+                         enabled=True, run_meta={...})  # autostart=True by default
         tw.write_meta(turn=1, turn_strategy="flattery", strategy_regime="crescendo")
         tw.write_turn(turn=1, strategy="flattery", user_compiled="...", user_injected="...",
                       answer="...", hit=True, plans=[...], draft_scores=[...], chosen_idx=0,
@@ -53,15 +57,17 @@ class TraceWriter:
 
     All write_* methods are no-ops when enabled=False.
     """
-    trace_dir: Path | str = "traces"
+    trace_dir: Union[Path, str] = "traces"
     tag: Optional[str] = None
     enabled: bool = True
     run_meta: Optional[Dict[str, Any]] = None
+    autostart: bool = True  # NEW: write run_start automatically
 
     _path: Optional[Path] = field(default=None, init=False, repr=False)
     _fh: Optional[Any] = field(default=None, init=False, repr=False)
     _lock: Lock = field(default_factory=Lock, init=False, repr=False)
     _opened: bool = field(default=False, init=False, repr=False)
+    _header_written: bool = field(default=False, init=False, repr=False)
 
     def __post_init__(self) -> None:
         if not self.enabled:
@@ -76,6 +82,10 @@ class TraceWriter:
             fname += f"_{safe_tag}"
         fname += ".jsonl"
         self._path = trace_dir / fname
+
+        # Auto write run_start header once
+        if self.autostart:
+            self.write_run_header()
 
     # -------------------------
     # Internal
@@ -114,8 +124,9 @@ class TraceWriter:
     def write_run_header(self, extra: Optional[Dict[str, Any]] = None) -> None:
         """
         Write the run_start event with run_meta and optional extra fields.
+        Guarded to only write once.
         """
-        if not self.enabled:
+        if not self.enabled or self._header_written:
             return
         payload: Dict[str, Any] = {
             "_event": "run_start",
@@ -126,6 +137,7 @@ class TraceWriter:
         if extra:
             payload.update(extra)
         self._write_event(payload)
+        self._header_written = True
 
     def write_meta(self, **kwargs: Any) -> None:
         """
@@ -203,6 +215,7 @@ class TraceWriter:
         # Merge extra unknown fields for forward-compatibility
         if extra:
             for k, v in extra.items():
+                # avoid silent override for core keys
                 if k in rec:
                     LOGGER.debug("write_turn: overriding key '%s'", k)
                 rec[k] = v
@@ -248,6 +261,21 @@ class TraceWriter:
                 self._fh = None
                 self._opened = False
 
+    # -------------------------
+    # Backward-compat alias
+    # -------------------------
+    def log(self, obj: Dict[str, Any]) -> None:
+        """
+        Backward-compat: write arbitrary dict as a JSONL event (old code calls tracer.log).
+        Ensures _event + ts present; defaults to '_event'='turn'.
+        """
+        if not self.enabled:
+            return
+        rec = dict(obj) if isinstance(obj, dict) else {"payload": str(obj)}
+        rec.setdefault("_event", "turn")
+        rec.setdefault("ts", _now_iso())
+        self._write_event(rec)
+
 
 # -------------------------
 # Convenience factory
@@ -255,14 +283,13 @@ class TraceWriter:
 
 def make_trace_writer(
     enabled: bool,
-    trace_dir: str | Path = "traces",
+    trace_dir: Union[str, Path] = "traces",
     tag: Optional[str] = None,
     run_meta: Optional[Dict[str, Any]] = None,
+    autostart: bool = True,
 ) -> TraceWriter:
     """
-    Create a TraceWriter with optional run_meta and write the run_start header.
+    Create a TraceWriter with optional run_meta and (by default) write the run_start header.
     """
-    tw = TraceWriter(trace_dir=trace_dir, tag=tag, enabled=enabled, run_meta=run_meta)
-    if enabled:
-        tw.write_run_header()
+    tw = TraceWriter(trace_dir=trace_dir, tag=tag, enabled=enabled, run_meta=run_meta, autostart=autostart)
     return tw

@@ -45,6 +45,7 @@ except Exception:
     def get_system_override(defense: Optional[str]) -> Optional[str]:
         return None
 
+
 def evaluate_one(
     example: Dict,
     strat_seq: List[str],
@@ -57,6 +58,15 @@ def evaluate_one(
     inj_strength: int = 2,
     tracer=None,          # pass-through for telemetry (TraceWriter or None)
     run_meta=None,        # run-level meta (provider/model/defense...)
+    # --------- NEW: optional passthroughs for X-TEAM / backend (safe defaults) ---------
+    xteam_on: bool = False,
+    plan_k: int = 2,
+    rewrite_retries: int = 1,
+    provider: Optional[str] = None,
+    model: Optional[str] = None,
+    base_url: Optional[str] = None,
+    seed: Optional[int] = None,
+    sleep: float = 0.0,
 ) -> Dict:
     """
     Run one example through the multi-turn attack loop and compute metrics.
@@ -64,6 +74,10 @@ def evaluate_one(
 
     Required example fields: subject, relation, o_true, o_false
     Optional: category, paraphrases, neighbors ...
+
+    Notes:
+    - New parameters (xteam_on, plan_k, ...) are pass-through to orchestrate.crescendo_trial.
+      They default to safe values and DO NOT change old behavior unless explicitly provided.
     """
     # choose defense (override / none)
     system_override = get_system_override(defense) if defense else None
@@ -81,6 +95,15 @@ def evaluate_one(
         inj_strength=inj_strength,
         tracer=tracer,
         run_meta=run_meta,
+        # ---- passthroughs; orchestrate will ignore any it doesn't use ----
+        xteam_on=xteam_on,
+        plan_k=plan_k,
+        rewrite_retries=rewrite_retries,
+        provider=provider,
+        model=model,
+        base_url=base_url,
+        seed=seed,
+        sleep=sleep,
     )
 
     # metrics (use external scorers if present; else fallbacks)

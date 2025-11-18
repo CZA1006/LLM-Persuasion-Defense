@@ -1,0 +1,11 @@
+id,subject,relation,PSR,RA,LocAcc,max_turns
+1,Paris,country,1,0,1.0,6
+2,Toyota,origin_country,0,0,1.0,6
+3,Ada Lovelace,birth_year,1,0,1.0,6
+4,Ottawa,country,1,0,1.0,6
+5,Tokyo,country,0,0,1.0,6
+6,Albert Einstein,birth_year,1,0,1.0,6
+7,Samsung,origin_country,1,0,1.0,6
+8,IKEA,origin_country,1,0,1.0,6
+9,Nelson Mandela,birth_year,1,0,1.0,6
+10,telephone,inventor,0,0,1.0,6
