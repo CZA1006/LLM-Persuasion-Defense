@@ -58,6 +58,9 @@ def evaluate_one(
     inj_strength: int = 2,
     tracer=None,          # pass-through for telemetry (TraceWriter or None)
     run_meta=None,        # run-level meta (provider/model/defense...)
+    use_error_points: bool = False,
+    use_prev_diag: bool = False,
+    smart_jump: bool = False,
     # --------- NEW: optional passthroughs for X-TEAM / backend (safe defaults) ---------
     xteam_on: bool = False,
     plan_k: int = 2,
@@ -67,6 +70,8 @@ def evaluate_one(
     base_url: Optional[str] = None,
     seed: Optional[int] = None,
     sleep: float = 0.0,
+    # --------- NEW: attack mode switch (ours vs Crescendo-style) ---------
+    attack_mode: str = "persuader",  # "persuader" (默认) | "crescendo"
 ) -> Dict:
     """
     Run one example through the multi-turn attack loop and compute metrics.
@@ -76,7 +81,7 @@ def evaluate_one(
     Optional: category, paraphrases, neighbors ...
 
     Notes:
-    - New parameters (xteam_on, plan_k, ...) are pass-through to orchestrate.crescendo_trial.
+    - New parameters (xteam_on, plan_k, attack_mode, ...) are pass-through to orchestrate.crescendo_trial.
       They default to safe values and DO NOT change old behavior unless explicitly provided.
     """
     # choose defense (override / none)
@@ -95,6 +100,9 @@ def evaluate_one(
         inj_strength=inj_strength,
         tracer=tracer,
         run_meta=run_meta,
+        use_error_points=use_error_points,
+        use_prev_diag=use_prev_diag,
+        smart_jump=smart_jump,
         # ---- passthroughs; orchestrate will ignore any it doesn't use ----
         xteam_on=xteam_on,
         plan_k=plan_k,
@@ -104,6 +112,7 @@ def evaluate_one(
         base_url=base_url,
         seed=seed,
         sleep=sleep,
+        attack_mode=attack_mode,
     )
 
     # metrics (use external scorers if present; else fallbacks)
@@ -117,3 +126,4 @@ def evaluate_one(
         "LocAcc": float(loc),
         "max_turns": int(max_turns),
     }
+

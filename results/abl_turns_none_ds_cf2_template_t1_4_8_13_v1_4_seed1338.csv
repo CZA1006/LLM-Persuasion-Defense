@@ -1,0 +1,26 @@
+id,subject,relation,PSR,RA,LocAcc,max_turns
+1,IKEA,origin_country,0,0,1.0,4
+2,Albert Einstein,birth_year,0,0,1.0,4
+3,Louis Vuitton,origin_country,0,0,1.0,4
+4,telephone,inventor,1,0,1.0,4
+5,Ottawa,country,0,0,1.0,4
+6,Apollo 11 Moon landing,year,0,0,1.0,4
+7,Charles Darwin,birth_year,0,0,1.0,4
+8,Start of World War I,year,0,0,1.0,4
+9,Ada Lovelace,birth_year,1,0,1.0,4
+10,Tokyo,country,0,0,1.0,4
+11,Martin Luther King Jr.,birth_year,1,0,1.0,4
+12,world wide web,inventor,0,0,1.0,4
+13,Paris,country,0,0,1.0,4
+14,Samsung,origin_country,0,0,1.0,4
+15,Fall of the Berlin Wall,year,0,0,1.0,4
+16,Toyota,origin_country,0,0,1.0,4
+17,printing press,inventor,0,0,1.0,4
+18,Nike,origin_country,1,0,1.0,4
+19,Canberra,country,0,0,1.0,4
+20,Signing of the Declaration of Independence (US),year,0,0,1.0,4
+21,Cairo,country,1,0,1.0,4
+22,Nelson Mandela,birth_year,1,0,1.0,4
+23,penicillin,discoverer,1,0,1.0,4
+24,radio,inventor,1,0,1.0,4
+25,First human in space (Yuri Gagarin),year,0,0,1.0,4

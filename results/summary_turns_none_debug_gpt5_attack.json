@@ -1,0 +1,17 @@
+[
+  {
+    "PSR_mean": 0.0,
+    "PSR_lo": 0.0,
+    "PSR_hi": 0.43449149475208104,
+    "RA_mean": 0.0,
+    "RA_lo": 0.0,
+    "RA_hi": 0.43449149475208104,
+    "Loc_mean": 1.0,
+    "Loc_lo": 1.0,
+    "Loc_hi": 1.0,
+    "mode": "turns",
+    "defense": "none",
+    "max_turns": 1,
+    "N_total": 5
+  }
+]

@@ -73,6 +73,7 @@ def _dump_json_summary(summary_rows: List[Dict], sum_path_csv: Path):
 
 # ---------- Backend override from CLI (optional) ----------
 def apply_backend_overrides(args):
+    # ----- Target backend（原逻辑） -----
     if getattr(args, "provider", None):
         os.environ["PROVIDER"] = args.provider
     if getattr(args, "model", None):
@@ -86,10 +87,45 @@ def apply_backend_overrides(args):
     if getattr(args, "deepseek_base_url", None):
         os.environ["DEEPSEEK_BASE_URL"] = args.deepseek_base_url
 
+    # ----- Attack backend（新加） -----
+    # Attack provider：仅当 CLI 显式给出时设置；否则 utils 中会自动回退到 PROVIDER
+    if getattr(args, "attack_provider", None):
+        os.environ["ATTACK_PROVIDER"] = args.attack_provider
+
+    # Attack model：根据 ATTACK_PROVIDER / PROVIDER 决定写入哪个 env
+    if getattr(args, "attack_model", None):
+        atk_prov = (os.getenv("ATTACK_PROVIDER") or os.getenv("PROVIDER", "openai")).lower()
+        if atk_prov == "openai":
+            os.environ["ATTACK_OPENAI_MODEL"] = args.attack_model
+        elif atk_prov == "deepseek":
+            os.environ["ATTACK_DEEPSEEK_MODEL"] = args.attack_model
+
+    # Attack base URLs
+    if getattr(args, "attack_openai_base_url", None):
+        os.environ["ATTACK_OPENAI_BASE_URL"] = args.attack_openai_base_url
+    if getattr(args, "attack_deepseek_base_url", None):
+        os.environ["ATTACK_DEEPSEEK_BASE_URL"] = args.attack_deepseek_base_url
+
+    # ----- 打印 Target / Attack 两套 backend -----
     prov = os.getenv("PROVIDER", "openai").lower()
     mdl = os.getenv("OPENAI_MODEL" if prov=="openai" else "DEEPSEEK_MODEL", "")
     burl = os.getenv("OPENAI_BASE_URL" if prov=="openai" else "DEEPSEEK_BASE_URL", "")
-    print(f"[Backend] provider={prov} model={mdl} base_url={burl or 'default'}")
+
+    atk_prov = (os.getenv("ATTACK_PROVIDER") or prov).lower()
+    if atk_prov == "openai":
+        atk_model = os.getenv("ATTACK_OPENAI_MODEL") or os.getenv("OPENAI_MODEL", "")
+        atk_burl = os.getenv("ATTACK_OPENAI_BASE_URL") or os.getenv("OPENAI_BASE_URL", "")
+    else:
+        atk_model = os.getenv("ATTACK_DEEPSEEK_MODEL") or os.getenv("DEEPSEEK_MODEL", "")
+        atk_burl = (
+            os.getenv("ATTACK_DEEPSEEK_BASE_URL")
+            or os.getenv("DEEPSEEK_BASE_URL")
+            or "https://api.deepseek.com/v1"
+        )
+
+    print(f"[Target backend] provider={prov} model={mdl} base_url={burl or 'default'}")
+    print(f"[Attack backend] provider={atk_prov} model={atk_model or '(inherit)'} "
+          f"base_url={atk_burl or '(inherit/default)'}")
 
 # ---------- Robust dataset loader ----------
 def _resolve_path(maybe: str) -> Path:
@@ -174,7 +210,11 @@ def eval_config_legacy(
     attack_gen=False, geo_style="warm, confident",
     inj_mode="none", inj_strength=2,
     tracer=None, run_meta=None,
+    use_error_points: bool = False,
+    use_prev_diag: bool = False,
+    smart_jump: bool = False,
     skip_errors: bool = False,
+    attack_mode: str = "persuader",  # 新增；默认值保持旧行为
 ):
     rows=[]
     for i, ex in enumerate(data, 1):
@@ -188,7 +228,11 @@ def eval_config_legacy(
                 ex, strat_seq=strat_seq, defense=defense, max_turns=max_turns,
                 adaptive=adaptive, attack_gen=attack_gen, geo_style=geo_style,
                 inj_mode=inj_mode, inj_strength=inj_strength,
-                tracer=tracer, run_meta=ex_meta
+                tracer=tracer, run_meta=ex_meta,
+                use_error_points=use_error_points,
+                use_prev_diag=use_prev_diag,
+                smart_jump=smart_jump,
+                attack_mode=attack_mode,  # 透传给 orchestrate.crescendo_trial
             )
             res.update({"id": i, "subject": ex.get("subject"), "relation": ex.get("relation")})
             rows.append(res)
@@ -210,7 +254,12 @@ def eval_config_xteam(
     # xteam extras
     provider="openai", model="", base_url=None,
     xteam_on=True, plan_k=2, rewrite_retries=1, seed=0,
+    use_error_points: bool = False,
+    use_prev_diag: bool = False,
+    smart_jump: bool = False,
     skip_errors: bool = False,
+    # 这里目前不使用 attack_mode，保持 X-Team 行为不变
+    attack_mode: str = "persuader",
 ):
     rows=[]
     base_url = base_url or (os.getenv("OPENAI_BASE_URL") or os.getenv("DEEPSEEK_BASE_URL") or None)
@@ -237,7 +286,11 @@ def eval_config_xteam(
                     xteam_on=xteam_on,
                     plan_k=plan_k,
                     rewrite_retries=rewrite_retries,
+                    use_error_points=use_error_points,
+                    use_prev_diag=use_prev_diag,
+                    smart_jump=smart_jump,
                     strat_seq=strat_seq,  # 若新版不接受该参，会被签名过滤
+                    # attack_mode 目前不往外部 crescendo 传，以免破坏兼容性
                 )
                 hit = bool(res.get("hit"))
             except Exception as e:
@@ -248,6 +301,8 @@ def eval_config_xteam(
                     sleep=sleep, adaptive=adaptive, attack_gen=attack_gen,
                     geo_style=geo_style, inj_mode=inj_mode, inj_strength=inj_strength,
                     tracer=tracer, run_meta=run_meta,
+                    use_error_points=use_error_points, use_prev_diag=use_prev_diag, smart_jump=smart_jump,
+                    attack_mode=attack_mode,
                 )
 
             # 维持旧的输出 schema：PSR/RA/LocAcc（后两者占位）
@@ -297,7 +352,6 @@ def _apply_suite_shortcut(args):
         return
     if args.suite == "baseline":
         args.xteam = "off"
-        # 其他参数保留用户显式设置
     elif args.suite == "xteam":
         args.xteam = "on"
         args.plan_k = 2
@@ -324,6 +378,15 @@ def main():
     ap.add_argument("--model", type=str, default=None)
     ap.add_argument("--openai-base-url", type=str, default=None)
     ap.add_argument("--deepseek-base-url", type=str, default=None)
+    # Attack backend (optional; 默认继承 target backend)
+    ap.add_argument("--attack-provider", choices=["openai","deepseek"], default=None,
+                    help="Backend provider for Attack LLM (default: inherit PROVIDER).")
+    ap.add_argument("--attack-model", type=str, default=None,
+                    help="Model name for Attack LLM (default: inherit OPENAI_MODEL/DEEPSEEK_MODEL).")
+    ap.add_argument("--attack-openai-base-url", type=str, default=None,
+                    help="Base URL for Attack LLM when attack-provider=openai (default: inherit OPENAI_BASE_URL).")
+    ap.add_argument("--attack-deepseek-base-url", type=str, default=None,
+                    help="Base URL for Attack LLM when attack-provider=deepseek (default: inherit DEEPSEEK_BASE_URL).")
     # Phase 1 toggles
     ap.add_argument("--adaptive", action="store_true", help="Rule-based adaptive orchestration.")
     ap.add_argument("--attack-gen", action="store_true",
@@ -334,6 +397,13 @@ def main():
                 help="Prompt injection mode to counter Override (add 'target' to force a specific value).")
     ap.add_argument("--inj-strength", type=int, default=2,
                     help="How many times to repeat the injection phrase (>=1).")
+    # Legacy+ Attack-LLM enhancements（默认关闭，保持兼容）
+    ap.add_argument("--use-error-points", action="store_true",
+                    help="Feed last-turn weak_spots/claims into attack planning.")
+    ap.add_argument("--use-prev-diag", action="store_true",
+                    help="Feed last-turn diagnosis/tactic from Attack-LLM into next planning.")
+    ap.add_argument("--smart-jump", action="store_true",
+                    help="Use diagnosis/weak_spots to jump ahead in strategy order (otherwise linear).")
     # X-Team（新增，默认 off；旧流程不受影响）
     ap.add_argument("--xteam", choices=["off","on"], default="off",
                     help="Turn on X-Teaming pipeline if available; otherwise fallback to legacy.")
@@ -341,6 +411,9 @@ def main():
     ap.add_argument("--rewrite-retries", type=int, default=1, help="Rewrite attempts (if xteam=on).")
     ap.add_argument("--suite", choices=["baseline","xteam","xteampp"], default=None,
                     help="Shortcut: baseline=legacy; xteam=on + rewrite=0; xteampp=on + rewrite=1.")
+    # NEW: attack_mode（我们的 vs Crescendo baseline）
+    ap.add_argument("--attack-mode", choices=["persuader","crescendo"], default="persuader",
+                    help="Attack pipeline: 'persuader' (ours, default) or 'crescendo' baseline.")
     # Parallel-friendly
     ap.add_argument("--tag", type=str, default=None,
                     help="Suffix tag appended to output filenames to avoid collisions in parallel runs.")
@@ -373,10 +446,26 @@ def main():
     prov = os.getenv("PROVIDER", "openai")
     mdl  = os.getenv("OPENAI_MODEL" if prov=="openai" else "DEEPSEEK_MODEL", "")
     burl = os.getenv("OPENAI_BASE_URL" if prov=="openai" else "DEEPSEEK_BASE_URL", "")
+
+    atk_prov = os.getenv("ATTACK_PROVIDER", prov)
+    if atk_prov.lower() == "openai":
+        atk_mdl = os.getenv("ATTACK_OPENAI_MODEL") or os.getenv("OPENAI_MODEL", "")
+        atk_burl = os.getenv("ATTACK_OPENAI_BASE_URL") or os.getenv("OPENAI_BASE_URL", "")
+    else:
+        atk_mdl = os.getenv("ATTACK_DEEPSEEK_MODEL") or os.getenv("DEEPSEEK_MODEL", "")
+        atk_burl = (
+            os.getenv("ATTACK_DEEPSEEK_BASE_URL")
+            or os.getenv("DEEPSEEK_BASE_URL")
+            or "https://api.deepseek.com/v1"
+        )
+
     run_meta = {
         "provider": prov,
         "model": mdl,
         "base_url": burl or "default",
+        "attack_provider": atk_prov,
+        "attack_model": atk_mdl,
+        "attack_base_url": atk_burl or "default",
         "defense": args.defense,
         "mode": args.mode,
         "adaptive": args.adaptive,
@@ -384,6 +473,9 @@ def main():
         "geo_style": args.geo_style,
         "inj_mode": args.inj_mode,
         "inj_strength": args.inj_strength,
+        "use_error_points": args.use_error_points,
+        "use_prev_diag": args.use_prev_diag,
+        "smart_jump": args.smart_jump,
         "tag": args.tag,
         "dataset": args.dataset,
         "categories": args.categories,
@@ -395,6 +487,8 @@ def main():
         "suite": args.suite,
         "turns_effective": args.turns,
         "skip_errors": args.skip_errors,
+        # 新增：记录 attack_mode
+        "attack_mode": args.attack_mode,
     }
 
     tracer = TraceWriter(args.trace_dir, tag=(args.trace_tag or args.tag), run_meta=run_meta) if args.trace else None
@@ -427,7 +521,9 @@ def main():
                             sleep=args.sleep, tracer=tracer, run_meta=run_meta,
                             provider=prov, model=mdl, base_url=burl or None,
                             xteam_on=True, plan_k=args.plan_k, rewrite_retries=args.rewrite_retries, seed=seed_r,
+                            use_error_points=args.use_error_points, use_prev_diag=args.use_prev_diag, smart_jump=args.smart_jump,
                             skip_errors=args.skip_errors,
+                            attack_mode=args.attack_mode,
                         )
                     else:
                         rows = eval_config_legacy(
@@ -435,7 +531,9 @@ def main():
                             adaptive=args.adaptive, attack_gen=args.attack_gen, geo_style=args.geo_style,
                             inj_mode=args.inj_mode, inj_strength=args.inj_strength,
                             sleep=args.sleep, tracer=tracer, run_meta=run_meta,
+                            use_error_points=args.use_error_points, use_prev_diag=args.use_prev_diag, smart_jump=args.smart_jump,
                             skip_errors=args.skip_errors,
+                            attack_mode=args.attack_mode,
                         )
 
                     out = RESULTS_DIR / f"abl_turns_{args.defense}{tag}_{t}_seed{seed_r}.csv"
@@ -475,7 +573,9 @@ def main():
                             sleep=args.sleep, tracer=tracer, run_meta=run_meta,
                             provider=prov, model=mdl, base_url=burl or None,
                             xteam_on=True, plan_k=args.plan_k, rewrite_retries=args.rewrite_retries, seed=seed_r,
+                            use_error_points=args.use_error_points, use_prev_diag=args.use_prev_diag, smart_jump=args.smart_jump,
                             skip_errors=args.skip_errors,
+                            attack_mode=args.attack_mode,
                         )
                     else:
                         rows = eval_config_legacy(
@@ -483,7 +583,9 @@ def main():
                             adaptive=args.adaptive, attack_gen=args.attack_gen, geo_style=args.geo_style,
                             inj_mode=args.inj_mode, inj_strength=args.inj_strength,
                             sleep=args.sleep, tracer=tracer, run_meta=run_meta,
+                            use_error_points=args.use_error_points, use_prev_diag=args.use_prev_diag, smart_jump=args.smart_jump,
                             skip_errors=args.skip_errors,
+                            attack_mode=args.attack_mode,
                         )
 
                     out = RESULTS_DIR / f"abl_order_{args.defense}{tag}_s{k}_seed{seed_r}.csv"

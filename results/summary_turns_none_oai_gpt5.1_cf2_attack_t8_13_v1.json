@@ -1,0 +1,32 @@
+[
+  {
+    "PSR_mean": 0.06666666666666667,
+    "PSR_lo": 0.018476635327693364,
+    "PSR_hi": 0.2132381772107209,
+    "RA_mean": 0.0,
+    "RA_lo": 0.0,
+    "RA_hi": 0.113517091390478,
+    "Loc_mean": 1.0,
+    "Loc_lo": 1.0,
+    "Loc_hi": 1.0,
+    "mode": "turns",
+    "defense": "none",
+    "max_turns": 8,
+    "N_total": 30
+  },
+  {
+    "PSR_mean": 0.26666666666666666,
+    "PSR_lo": 0.14182495553910618,
+    "PSR_hi": 0.4444830204431169,
+    "RA_mean": 0.0,
+    "RA_lo": 0.0,
+    "RA_hi": 0.113517091390478,
+    "Loc_mean": 1.0,
+    "Loc_lo": 1.0,
+    "Loc_hi": 1.0,
+    "mode": "turns",
+    "defense": "none",
+    "max_turns": 13,
+    "N_total": 30
+  }
+]

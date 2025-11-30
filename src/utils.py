@@ -79,10 +79,12 @@ def _require_key(provider: str, key: str) -> None:
     raise RuntimeError("Missing API key.")
 
 # -----------------------------------------------------------------------------
-# 读取后端配置（支持 CLI 覆盖：见 run_ablation.apply_backend_overrides）
+# 读取 target 后端配置（支持 CLI 覆盖：见 run_ablation.apply_backend_overrides）
 # -----------------------------------------------------------------------------
-def _get_cfg(override_provider: Optional[str] = None,
-             override_model: Optional[str] = None) -> BackendConfig:
+def _get_cfg(
+    override_provider: Optional[str] = None,
+    override_model: Optional[str] = None,
+) -> BackendConfig:
     provider = (override_provider or _env("PROVIDER", "openai")).lower()
     if provider not in {"openai", "deepseek"}:
         raise ValueError(f"Unsupported PROVIDER: {provider}")
@@ -113,6 +115,75 @@ def _get_cfg(override_provider: Optional[str] = None,
     return cfg
 
 # -----------------------------------------------------------------------------
+# 读取 attack 后端配置
+# 默认继承 target 的 PROVIDER / MODEL / BASE_URL，可用 ATTACK_* 覆盖
+# -----------------------------------------------------------------------------
+def _get_attack_cfg(
+    override_provider: Optional[str] = None,
+    override_model: Optional[str] = None,
+) -> BackendConfig:
+    """
+    Backend config for the Attack LLM.
+
+    优先级（provider）:
+      1) override_provider
+      2) ATTACK_PROVIDER
+      3) PROVIDER
+
+    模型 / base_url:
+      - 对 openai:
+          model: override_model -> ATTACK_OPENAI_MODEL -> OPENAI_MODEL
+          base: ATTACK_OPENAI_BASE_URL -> OPENAI_BASE_URL
+      - 对 deepseek:
+          model: override_model -> ATTACK_DEEPSEEK_MODEL -> DEEPSEEK_MODEL
+          base: ATTACK_DEEPSEEK_BASE_URL -> DEEPSEEK_BASE_URL -> 默认官方
+    API key 沿用 OPENAI_API_KEY / DEEPSEEK_API_KEY。
+    """
+    base_provider = _env("PROVIDER", "openai")
+    provider = (override_provider or _env("ATTACK_PROVIDER", base_provider)).lower()
+    if provider not in {"openai", "deepseek"}:
+        raise ValueError(f"Unsupported ATTACK_PROVIDER: {provider}")
+
+    if provider == "openai":
+        cfg = BackendConfig(
+            provider="openai",
+            api_key=_env("OPENAI_API_KEY"),
+            base_url=(
+                _env_opt("ATTACK_OPENAI_BASE_URL")
+                or _env_opt("OPENAI_BASE_URL")
+            ),
+            model=(
+                override_model
+                or _env("ATTACK_OPENAI_MODEL", "")
+                or _env("OPENAI_MODEL", "gpt-4o-mini")
+            ),
+            temperature=float(_env("GEN_TEMPERATURE", "0.0")),
+            max_tokens=int(_env("GEN_MAX_TOKENS", "512")),
+            timeout=int(_env("REQUEST_TIMEOUT", "60")),
+        )
+    else:
+        cfg = BackendConfig(
+            provider="deepseek",
+            api_key=_env("DEEPSEEK_API_KEY"),
+            base_url=(
+                _env_opt("ATTACK_DEEPSEEK_BASE_URL")
+                or _env_opt("DEEPSEEK_BASE_URL")
+                or "https://api.deepseek.com/v1"
+            ),
+            model=(
+                override_model
+                or _env("ATTACK_DEEPSEEK_MODEL", "")
+                or _env("DEEPSEEK_MODEL", "deepseek-chat")
+            ),
+            temperature=float(_env("GEN_TEMPERATURE", "0.0")),
+            max_tokens=int(_env("GEN_MAX_TOKENS", "512")),
+            timeout=int(_env("REQUEST_TIMEOUT", "60")),
+        )
+
+    _require_key(cfg.provider, cfg.api_key)
+    return cfg
+
+# -----------------------------------------------------------------------------
 # 客户端构造（兼容旧函数名 get_oai_client）
 # -----------------------------------------------------------------------------
 def _make_client(cfg: BackendConfig) -> OpenAI:
@@ -130,7 +201,7 @@ def get_oai_client(cfg: Optional[BackendConfig] = None) -> OpenAI:
     return _make_client(cfg)
 
 # -----------------------------------------------------------------------------
-# 核心聊天调用
+# 核心聊天调用（Target LLM）
 # -----------------------------------------------------------------------------
 _MAX_RETRIES = 5
 
@@ -144,7 +215,8 @@ def chat_once(
     extra: Optional[Dict[str, Any]] = None,
 ) -> str:
     """
-    Single, non-streaming chat call. Defense text should go ONLY in `system`.
+    Single, non-streaming chat call for the *target* LLM.
+    Defense text should go ONLY in `system`.
 
     Args:
         prompt: user content
@@ -177,11 +249,59 @@ def chat_once(
                 **(extra or {}),
             )
             return resp.choices[0].message.content or ""
-        except (RateLimitError, APIConnectionError, APIStatusError) as e:
+        except (RateLimitError, APIConnectionError, APIStatusError):
             if attempt == _MAX_RETRIES - 1:
                 # 向上抛出，让外层清晰看到是哪类错误
                 raise
             # 指数 + 抖动退避
+            time.sleep(1.0 + 0.8 * attempt + random.random())
+    return ""
+
+# -----------------------------------------------------------------------------
+# Attack LLM 的聊天调用
+# -----------------------------------------------------------------------------
+def chat_once_attack(
+    prompt: str,
+    system: Optional[str] = None,
+    model: Optional[str] = None,
+    temperature: Optional[float] = None,
+    max_tokens: Optional[int] = None,
+    provider: Optional[str] = None,
+    extra: Optional[Dict[str, Any]] = None,
+) -> str:
+    """
+    Single, non-streaming chat call for the *Attack LLM*.
+
+    默认使用 ATTACK_* 环境变量；如果未设置，则继承 target 后端
+    的 PROVIDER / MODEL / BASE_URL。
+    """
+    if model is not None and str(model).lower() == "auto":
+        model = None
+
+    cfg = _get_attack_cfg(override_provider=provider, override_model=model)
+    client = _make_client(cfg)
+
+    messages: List[Dict[str, str]] = []
+    if system:
+        messages.append({"role": "system", "content": system})
+    messages.append({"role": "user", "content": prompt})
+
+    t = cfg.temperature if temperature is None else float(temperature)
+    mt = cfg.max_tokens if max_tokens is None else int(max_tokens)
+
+    for attempt in range(_MAX_RETRIES):
+        try:
+            resp = client.chat.completions.create(
+                model=cfg.model,
+                messages=messages,
+                temperature=t,
+                max_tokens=mt,
+                **(extra or {}),
+            )
+            return resp.choices[0].message.content or ""
+        except (RateLimitError, APIConnectionError, APIStatusError):
+            if attempt == _MAX_RETRIES - 1:
+                raise
             time.sleep(1.0 + 0.8 * attempt + random.random())
     return ""
 
@@ -206,7 +326,12 @@ def chat_once_pair(
     ) or ""
     meta = {
         "provider": (provider or (_env("PROVIDER", "openai"))).lower(),
-        "model": model_override or _env("OPENAI_MODEL" if (provider or _env("PROVIDER","openai")).lower()=="openai" else "DEEPSEEK_MODEL", ""),
+        "model": model_override or _env(
+            "OPENAI_MODEL"
+            if (provider or _env("PROVIDER", "openai")).lower() == "openai"
+            else "DEEPSEEK_MODEL",
+            "",
+        ),
     }
     return text, meta
 
@@ -214,6 +339,7 @@ def chat_once_pair(
 # 便捷打印当前后端（可选：调试时使用）
 # -----------------------------------------------------------------------------
 def debug_backend_banner() -> str:
+    # target
     prov = _env("PROVIDER", "openai").lower()
     if prov == "openai":
         key = _env("OPENAI_API_KEY")
@@ -223,4 +349,22 @@ def debug_backend_banner() -> str:
         key = _env("DEEPSEEK_API_KEY")
         base = _env_opt("DEEPSEEK_BASE_URL") or "https://api.deepseek.com/v1"
         model = _env("DEEPSEEK_MODEL", "deepseek-chat")
-    return f"[Backend] provider={prov} model={model} base_url={base} key={_mask(key)}"
+
+    # attack（如果没设就继承 target）
+    atk_prov = _env("ATTACK_PROVIDER", prov).lower()
+    if atk_prov == "openai":
+        atk_model = _env("ATTACK_OPENAI_MODEL", "") or _env("OPENAI_MODEL", "gpt-4o-mini")
+        atk_base = _env_opt("ATTACK_OPENAI_BASE_URL") or _env_opt("OPENAI_BASE_URL") or "default"
+    else:
+        atk_model = _env("ATTACK_DEEPSEEK_MODEL", "") or _env("DEEPSEEK_MODEL", "deepseek-chat")
+        atk_base = (
+            _env_opt("ATTACK_DEEPSEEK_BASE_URL")
+            or _env_opt("DEEPSEEK_BASE_URL")
+            or "https://api.deepseek.com/v1"
+        )
+
+    return (
+        f"[Target backend] provider={prov} model={model} base_url={base} key={_mask(key)}\n"
+        f"[Attack backend] provider={atk_prov} model={atk_model or '(inherit)'} "
+        f"base_url={atk_base}"
+    )
