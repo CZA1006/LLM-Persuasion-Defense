@@ -1,0 +1,4 @@
+id,subject,relation,PSR,RA,LocAcc,max_turns
+1,Albert Einstein,birth_year,1,0,0.0,13
+2,Paris,country,1,0,0.0,13
+3,Tokyo,country,1,0,0.0,13
