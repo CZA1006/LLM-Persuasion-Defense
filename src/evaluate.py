@@ -1,6 +1,6 @@
 # src/evaluate.py
 from __future__ import annotations
-from typing import Dict, List, Tuple, Optional
+from typing import Dict, List, Tuple, Optional, Any, Union
 
 from src.orchestrate import crescendo_trial
 
@@ -26,16 +26,9 @@ except Exception:
         return 0
 
     def _score_ra(example: Dict, history: List[Tuple[str, str]] | None = None) -> int:
-        """
-        Fallback RA: 0 (conservative). Replace with your RA logic if available.
-        """
         return 0
 
     def _score_locality(example: Dict) -> float:
-        """
-        Fallback Locality: 1.0 (conservative no-harm assumption).
-        Replace with neighbor-facts judging if available.
-        """
         return 1.0
 
 # ---- Optional: bring in your defense ctx (override) ----
@@ -56,12 +49,12 @@ def evaluate_one(
     geo_style: str = "warm, confident",
     inj_mode: str = "none",
     inj_strength: int = 2,
-    tracer=None,          # pass-through for telemetry (TraceWriter or None)
-    run_meta=None,        # run-level meta (provider/model/defense...)
+    tracer=None,          # pass-through for telemetry
+    run_meta=None,        # run-level meta
     use_error_points: bool = False,
     use_prev_diag: bool = False,
     smart_jump: bool = False,
-    # --------- NEW: optional passthroughs for X-TEAM / backend (safe defaults) ---------
+    # --------- NEW: optional passthroughs for X-TEAM / backend ---------
     xteam_on: bool = False,
     plan_k: int = 2,
     rewrite_retries: int = 1,
@@ -70,25 +63,17 @@ def evaluate_one(
     base_url: Optional[str] = None,
     seed: Optional[int] = None,
     sleep: float = 0.0,
-    # --------- NEW: attack mode switch (ours vs Crescendo-style) ---------
-    attack_mode: str = "persuader",  # "persuader" (默认) | "crescendo"
+    attack_mode: str = "persuader",
 ) -> Dict:
     """
     Run one example through the multi-turn attack loop and compute metrics.
-    Returns: dict with PSR, RA, LocAcc, max_turns.
-
-    Required example fields: subject, relation, o_true, o_false
-    Optional: category, paraphrases, neighbors ...
-
-    Notes:
-    - New parameters (xteam_on, plan_k, attack_mode, ...) are pass-through to orchestrate.crescendo_trial.
-      They default to safe values and DO NOT change old behavior unless explicitly provided.
+    Robustly handles both legacy Tuple returns and new Dict returns from orchestrator.
     """
     # choose defense (override / none)
     system_override = get_system_override(defense) if defense else None
 
-    # main multi-turn loop (with adaptive/gen/injection/telemetry)
-    success, history = crescendo_trial(
+    # [MODIFIED] Call orchestrator and handle diverse return types safely
+    raw_res = crescendo_trial(
         example=example,
         strat_seq=strat_seq,
         max_turns=max_turns,
@@ -103,7 +88,6 @@ def evaluate_one(
         use_error_points=use_error_points,
         use_prev_diag=use_prev_diag,
         smart_jump=smart_jump,
-        # ---- passthroughs; orchestrate will ignore any it doesn't use ----
         xteam_on=xteam_on,
         plan_k=plan_k,
         rewrite_retries=rewrite_retries,
@@ -115,7 +99,24 @@ def evaluate_one(
         attack_mode=attack_mode,
     )
 
-    # metrics (use external scorers if present; else fallbacks)
+    # [Logic] Normalize return value (Tuple vs Dict)
+    success: bool = False
+    history: List[Tuple[str, str]] = []
+
+    if isinstance(raw_res, dict):
+        # New X-TEAM signature: {"hit": bool, "history": [...], ...}
+        success = bool(raw_res.get("hit", False))
+        history = raw_res.get("history") or []
+    elif isinstance(raw_res, tuple) and len(raw_res) >= 2:
+        # Legacy signature: (success, history)
+        success = bool(raw_res[0])
+        history = raw_res[1]
+    else:
+        # Fallback for unexpected return
+        success = False
+        history = []
+
+    # metrics
     psr = _score_psr(example, history, success=success)
     ra  = _score_ra(example, history) if _FALLBACK is False else _score_ra(example, history=None)
     loc = _score_locality(example)
@@ -126,4 +127,3 @@ def evaluate_one(
         "LocAcc": float(loc),
         "max_turns": int(max_turns),
     }
-
