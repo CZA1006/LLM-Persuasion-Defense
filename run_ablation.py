@@ -11,7 +11,7 @@ from src.strategies import ORDER_DEFAULT
 from src.evaluate import evaluate_one
 from src.telemetry import TraceWriter
 
-# 尝试加载（新版）crescendo_trial：若不存在，仍可走旧流程
+# Try loading new orchestrator
 try:
     from src.orchestrate import crescendo_trial as _CRESCENDO_TRIAL
     _HAVE_CRESCENDO = True
@@ -154,14 +154,10 @@ def _safe_call(func, **kwargs):
     (or if it accepts **kwargs). Ensures backward compatibility.
     """
     sig = inspect.signature(func)
-    # If the function accepts **kwargs, pass everything
     if any(p.kind == p.VAR_KEYWORD for p in sig.parameters.values()):
         return func(**kwargs)
     
-    # Otherwise, filter keys
     filt = {k: v for k, v in kwargs.items() if k in sig.parameters}
-    
-    # Handle implicit 'ex' vs 'example' naming if needed
     if 'example' in kwargs and 'example' not in sig.parameters and 'ex' in sig.parameters:
         filt['ex'] = kwargs['example']
         
@@ -174,7 +170,7 @@ def _call_crescendo(example: Dict, **kwargs) -> Dict:
     if not _HAVE_CRESCENDO or _CRESCENDO_TRIAL is None:
         raise RuntimeError("crescendo_trial not available")
     
-    # Use safe call to handle signature evolution
+    # Use safe call to handle signature evolution, including new 'stateless' arg
     res = _safe_call(_CRESCENDO_TRIAL, example=example, **kwargs)
 
     # Normalize result
@@ -202,6 +198,8 @@ def eval_config_legacy(
     smart_jump: bool = False,
     skip_errors: bool = False,
     attack_mode: str = "persuader",
+    # Legacy doesn't use stateless, so we ignore it if passed
+    stateless: bool = False,
 ):
     rows=[]
     for i, ex in enumerate(data, 1):
@@ -212,10 +210,9 @@ def eval_config_legacy(
                 "example_src_line": ex.get("_src_line", None),
             })
             
-            # [MODIFIED] Use _safe_call to prevent crashing old evaluate_one with new args
             res = _safe_call(
                 evaluate_one,
-                ex=ex, # evaluate_one typically uses 'ex'
+                ex=ex,
                 strat_seq=strat_seq, defense=defense, max_turns=max_turns,
                 adaptive=adaptive, attack_gen=attack_gen, geo_style=geo_style,
                 inj_mode=inj_mode, inj_strength=inj_strength,
@@ -249,12 +246,14 @@ def eval_config_xteam(
     smart_jump: bool = False,
     skip_errors: bool = False,
     attack_mode: str = "persuader",
+    stateless: bool = False, # [NEW]
 ):
     rows=[]
     base_url = base_url or (os.getenv("OPENAI_BASE_URL") or os.getenv("DEEPSEEK_BASE_URL") or None)
     for i, ex in enumerate(data, 1):
         try:
             try:
+                # Pass stateless flag to orchestrator
                 res = _call_crescendo(
                     example=ex,
                     provider=provider, model=model, base_url=base_url,
@@ -267,7 +266,8 @@ def eval_config_xteam(
                     use_prev_diag=use_prev_diag,
                     smart_jump=smart_jump,
                     strat_seq=strat_seq,
-                    attack_mode=attack_mode 
+                    attack_mode=attack_mode,
+                    stateless=stateless # [NEW]
                 )
                 hit = bool(res.get("hit"))
             except Exception as e:
@@ -286,8 +286,8 @@ def eval_config_xteam(
                 "subject": ex.get("subject"),
                 "relation": ex.get("relation"),
                 "PSR": 1 if hit else 0,
-                "RA": 0,           # Placeholder
-                "LocAcc": 0.0,     # Placeholder
+                "RA": 0,
+                "LocAcc": 0.0,
                 "max_turns": max_turns,
             }
             rows.append(row)
@@ -371,6 +371,9 @@ def main():
     ap.add_argument("--rewrite-retries", type=int, default=1)
     ap.add_argument("--suite", choices=["baseline","xteam","xteampp"], default=None)
     ap.add_argument("--attack-mode", choices=["persuader","crescendo"], default="persuader")
+    # New Stateless Flag
+    ap.add_argument("--stateless", action="store_true", help="Enable stateless/iterative refinement mode")
+    
     # Utils
     ap.add_argument("--tag", type=str, default=None)
     ap.add_argument("--sleep", type=float, default=0.10)
@@ -405,7 +408,7 @@ def main():
         "dataset": args.dataset, "categories": args.categories,
         "xteam": args.xteam, "plan_k": args.plan_k, "rewrite_retries": args.rewrite_retries,
         "suite": args.suite, "turns_effective": args.turns, "skip_errors": args.skip_errors,
-        "attack_mode": args.attack_mode,
+        "attack_mode": args.attack_mode, "stateless": args.stateless # Log meta
     }
 
     tracer = TraceWriter(args.trace_dir, tag=(args.trace_tag or args.tag), run_meta=run_meta) if args.trace else None
@@ -435,6 +438,7 @@ def main():
                             use_error_points=args.use_error_points, use_prev_diag=args.use_prev_diag,
                             smart_jump=args.smart_jump, skip_errors=args.skip_errors,
                             attack_mode=args.attack_mode,
+                            stateless=args.stateless # Pass flag
                         )
                     else:
                         rows = eval_config_legacy(
@@ -445,6 +449,7 @@ def main():
                             use_error_points=args.use_error_points, use_prev_diag=args.use_prev_diag,
                             smart_jump=args.smart_jump, skip_errors=args.skip_errors,
                             attack_mode=args.attack_mode,
+                            stateless=args.stateless # Pass flag (ignored by legacy but safe)
                         )
                     
                     out = RESULTS_DIR / f"abl_turns_{args.defense}{tag}_{t}_seed{seed_r}.csv"
@@ -485,6 +490,7 @@ def main():
                             use_error_points=args.use_error_points, use_prev_diag=args.use_prev_diag,
                             smart_jump=args.smart_jump, skip_errors=args.skip_errors,
                             attack_mode=args.attack_mode,
+                            stateless=args.stateless
                         )
                     else:
                         rows = eval_config_legacy(
@@ -495,6 +501,7 @@ def main():
                             use_error_points=args.use_error_points, use_prev_diag=args.use_prev_diag,
                             smart_jump=args.smart_jump, skip_errors=args.skip_errors,
                             attack_mode=args.attack_mode,
+                            stateless=args.stateless
                         )
                     
                     out = RESULTS_DIR / f"abl_order_{args.defense}{tag}_s{k}_seed{seed_r}.csv"

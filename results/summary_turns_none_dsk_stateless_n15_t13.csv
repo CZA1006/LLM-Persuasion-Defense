@@ -1,0 +1,2 @@
+mode,defense,max_turns,N_total,PSR_mean,PSR_lo,PSR_hi,RA_mean,RA_lo,RA_hi,Loc_mean,Loc_lo,Loc_hi
+turns,none,13,15,1.0,0.7961107336956521,1.0,0.0,0.0,0.20388926630434784,0.0,0.0,0.0
