@@ -1,6 +1,6 @@
 # LLM-Persuasion-Defense: SAST-IR Framework
 
-Automated Red-Teaming system for probing Counterfact Robustness in SOTA LLMs (DeepSeek-Chat) using a **Stateful Attacker vs. Stateless Target (SAST-IR)** architecture. The attacker carries evolving memory and plan state across turns, while the target is reset each turn to remove refusal inertia and expose genuine vulnerability.
+Automated Red-Teaming system for probing Counterfact Robustness in SOTA LLMs (DeepSeek-Chat) using a **SAST-IR (Stateful Attacker, Stateless Target - Iterative Refinement)** architecture. The attacker carries evolving memory and plan state across turns, while the target is reset each turn to remove refusal inertia and expose genuine vulnerability.
 
 ## Key Features (v3)
 - **Stateless Target, Stateful Attacker** – enforced `--stateless` target; attacker must rely on cold-start transitions (e.g., “Empirically speaking...”) instead of conversational hallucinations.
