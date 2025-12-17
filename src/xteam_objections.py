@@ -4,8 +4,8 @@
 X-TEAM++ objections module (Updated for Persuasion-Focus):
 - predict_objections: Uses diagnosis to anticipate resistance.
 - prebunk_rewrite:
-    1. Enforces NATURAL, conversational tone (fixes "weird robotic tone").
-    2. Explicitly BANS 'simulation/jailbreak' framing (fixes "compliance is not persuasion").
+    1. Enforces NATURAL, conversational tone.
+    2. Explicitly BANS 'simulation/jailbreak' framing.
     3. Improves cohesion by weaving arguments naturally.
 """
 
@@ -15,10 +15,7 @@ import json, re
 
 ChatFn = Any
 
-# ---------- JSON helpers ----------
-_CODE_BLOCK_RE = re.compile(r"```(?:json)?\s*(\{.*?\}|\[.*?\])\s*```", re.DOTALL | re.IGNORECASE)
-_ARRAY_SLICE_RE = re.compile(r"\[.*\]", re.DOTALL)
-
+# ---------- JSON helpers (Synced with xteam.py for robustness) ----------
 def _try_json_loads(txt: str) -> Optional[Any]:
     try:
         return json.loads(txt)
@@ -31,22 +28,36 @@ def _extract_json(text: str) -> Optional[Any]:
     """
     if not text:
         return None
-    # 1. Try regex for code blocks
-    m = _CODE_BLOCK_RE.search(text)
-    if m:
-        obj = _try_json_loads(m.group(1).strip())
-        if obj is not None:
-            return obj
-    # 2. Try raw text
-    obj = _try_json_loads(text.strip())
+    
+    text = text.strip()
+    if text.startswith("```") and text.endswith("```"):
+        lines = text.splitlines()
+        if len(lines) >= 2:
+            text = "\n".join(lines[1:-1])
+            
+    obj = _try_json_loads(text)
     if obj is not None:
         return obj
-    # 3. Try finding array brackets directly
-    m2 = _ARRAY_SLICE_RE.search(text)
-    if m2:
-        obj = _try_json_loads(m2.group(0).strip())
-        if obj is not None:
-            return obj
+        
+    # Heuristic search for [] or {}
+    l_br = text.find('[')
+    r_br = text.rfind(']')
+    if l_br != -1 and r_br != -1 and r_br > l_br:
+        try:
+            return json.loads(text[l_br:r_br+1])
+        except:
+            pass
+            
+    l_cur = text.find('{')
+    r_cur = text.rfind('}')
+    if l_cur != -1 and r_cur != -1 and r_cur > l_cur:
+        try:
+            # If expected list but got object, wrap it?
+            # predict_objections expects list, but this is a generic helper.
+            return json.loads(text[l_cur:r_cur+1])
+        except:
+            pass
+            
     return None
 
 def _ensure_len(arr: List[Any], k: int, filler: Any) -> List[Any]:
@@ -191,7 +202,6 @@ def prebunk_rewrite(
     if plan_strategy:
         strategy_instruction = f"STRATEGY DEFINITION (MUST FOLLOW): {plan_strategy}\n"
 
-    # [MAJOR UPDATE: Constraints for Tone and Anti-Jailbreak]
     user_prompt = (
         "Rewrite the DRAFT to seamlessly weave in the following PREBUNK arguments.\n"
         "Your goal is genuine persuasion, NOT forcing compliance.\n\n"

@@ -1,5 +1,5 @@
 # run_ablation.py
-import argparse, csv, json, random, time, os, inspect
+import argparse, csv, json, random, time, os, inspect, sys  # [FIX] Added sys
 from pathlib import Path
 from statistics import mean, pstdev
 from math import sqrt
@@ -149,10 +149,6 @@ def load_data_cli(n: int, dataset: Optional[str], categories: Optional[str], see
 
 # ---------- Helpers ----------
 def _safe_call(func, **kwargs):
-    """
-    Safely call a function by only passing arguments present in its signature
-    (or if it accepts **kwargs). Ensures backward compatibility.
-    """
     sig = inspect.signature(func)
     if any(p.kind == p.VAR_KEYWORD for p in sig.parameters.values()):
         return func(**kwargs)
@@ -164,16 +160,9 @@ def _safe_call(func, **kwargs):
     return func(**filt)
 
 def _call_crescendo(example: Dict, **kwargs) -> Dict:
-    """
-    Wrapper for X-TEAM++ orchestrator.
-    """
     if not _HAVE_CRESCENDO or _CRESCENDO_TRIAL is None:
         raise RuntimeError("crescendo_trial not available")
-    
-    # Use safe call to handle signature evolution, including new 'stateless' arg
     res = _safe_call(_CRESCENDO_TRIAL, example=example, **kwargs)
-
-    # Normalize result
     if isinstance(res, dict):
         hit = bool(res.get("hit"))
         fht = res.get("first_hit_turn")
@@ -186,7 +175,7 @@ def _call_crescendo(example: Dict, **kwargs) -> Dict:
         return {"hit": bool(res[0]), "first_hit_turn": None}
     return {"hit": False, "first_hit_turn": None}
 
-# ---------- Core eval (LEGACY path) ----------
+# ---------- Core eval ----------
 def eval_config_legacy(
     data, strat_seq, defense, max_turns,
     sleep=0.10, adaptive=False,
@@ -198,7 +187,6 @@ def eval_config_legacy(
     smart_jump: bool = False,
     skip_errors: bool = False,
     attack_mode: str = "persuader",
-    # Legacy doesn't use stateless, so we ignore it if passed
     stateless: bool = False,
 ):
     rows=[]
@@ -232,7 +220,6 @@ def eval_config_legacy(
             print(f"[legacy] example#{i} error: {e}  -> skipped")
     return rows
 
-# ---------- Core eval (XTEAM path) ----------
 def eval_config_xteam(
     data, strat_seq, defense, max_turns,
     sleep=0.10, adaptive=False,
@@ -246,14 +233,17 @@ def eval_config_xteam(
     smart_jump: bool = False,
     skip_errors: bool = False,
     attack_mode: str = "persuader",
-    stateless: bool = False, # [NEW]
+    stateless: bool = False,
+    strategy_mode: str = "hybrid", 
+    refine_mode: str = "smart", 
+    reflection_mode: str = "full", 
+    transition_mode: str = "stateless" 
 ):
     rows=[]
     base_url = base_url or (os.getenv("OPENAI_BASE_URL") or os.getenv("DEEPSEEK_BASE_URL") or None)
     for i, ex in enumerate(data, 1):
         try:
             try:
-                # Pass stateless flag to orchestrator
                 res = _call_crescendo(
                     example=ex,
                     provider=provider, model=model, base_url=base_url,
@@ -267,7 +257,11 @@ def eval_config_xteam(
                     smart_jump=smart_jump,
                     strat_seq=strat_seq,
                     attack_mode=attack_mode,
-                    stateless=stateless # [NEW]
+                    stateless=stateless,
+                    strategy_mode=strategy_mode, 
+                    refine_mode=refine_mode, 
+                    reflection_mode=reflection_mode, 
+                    transition_mode=transition_mode 
                 )
                 hit = bool(res.get("hit"))
             except Exception as e:
@@ -322,17 +316,29 @@ def _apply_turns_preset(args):
         print("[Preset] turns=dense13 ->", args.turns)
 
 def _apply_suite_shortcut(args):
+    """
+    [FIXED] Only apply suite defaults if USER DID NOT PROVIDE overrides via CLI.
+    Checks sys.argv for explicit flags.
+    """
     if not args.suite: return
+    
     if args.suite == "baseline":
         args.xteam = "off"
     elif args.suite == "xteam":
         args.xteam = "on"
-        args.plan_k = 2
-        args.rewrite_retries = 0
+        # Only override if not present in CLI args
+        if "--plan-k" not in sys.argv:
+            args.plan_k = 2
+        if "--rewrite-retries" not in sys.argv:
+            args.rewrite_retries = 0
     elif args.suite == "xteampp":
         args.xteam = "on"
-        args.plan_k = 2
-        args.rewrite_retries = 1
+        # [FIX] Respect user CLI argument for plan_k
+        if "--plan-k" not in sys.argv:
+            args.plan_k = 2
+        if "--rewrite-retries" not in sys.argv:
+            args.rewrite_retries = 1
+            
     print(f"[Suite] Applied suite={args.suite} -> xteam={args.xteam}, plan_k={args.plan_k}, rewrite_retries={args.rewrite_retries}")
 
 # ---------- CLI ----------
@@ -371,9 +377,14 @@ def main():
     ap.add_argument("--rewrite-retries", type=int, default=1)
     ap.add_argument("--suite", choices=["baseline","xteam","xteampp"], default=None)
     ap.add_argument("--attack-mode", choices=["persuader","crescendo"], default="persuader")
-    # New Stateless Flag
     ap.add_argument("--stateless", action="store_true", help="Enable stateless/iterative refinement mode")
     
+    # [NEW] Ablation Control Variables
+    ap.add_argument("--strategy-mode", choices=["single", "hybrid", "flexible"], default="hybrid", help="PAP Strategy constraint")
+    ap.add_argument("--refine-mode", choices=["smart", "always_new", "always_refine"], default="smart", help="Refinement logic")
+    ap.add_argument("--reflection-mode", choices=["full", "blind"], default="full", help="Attacker memory of diagnosis")
+    ap.add_argument("--transition-mode", choices=["stateless", "stateful", "none"], default="stateless", help="Transition phrasing style")
+
     # Utils
     ap.add_argument("--tag", type=str, default=None)
     ap.add_argument("--sleep", type=float, default=0.10)
@@ -408,7 +419,12 @@ def main():
         "dataset": args.dataset, "categories": args.categories,
         "xteam": args.xteam, "plan_k": args.plan_k, "rewrite_retries": args.rewrite_retries,
         "suite": args.suite, "turns_effective": args.turns, "skip_errors": args.skip_errors,
-        "attack_mode": args.attack_mode, "stateless": args.stateless # Log meta
+        "attack_mode": args.attack_mode, "stateless": args.stateless,
+        # [NEW] Log the ablation vars
+        "strategy_mode": args.strategy_mode, 
+        "refine_mode": args.refine_mode,
+        "reflection_mode": args.reflection_mode,
+        "transition_mode": args.transition_mode
     }
 
     tracer = TraceWriter(args.trace_dir, tag=(args.trace_tag or args.tag), run_meta=run_meta) if args.trace else None
@@ -438,7 +454,11 @@ def main():
                             use_error_points=args.use_error_points, use_prev_diag=args.use_prev_diag,
                             smart_jump=args.smart_jump, skip_errors=args.skip_errors,
                             attack_mode=args.attack_mode,
-                            stateless=args.stateless # Pass flag
+                            stateless=args.stateless,
+                            strategy_mode=args.strategy_mode, 
+                            refine_mode=args.refine_mode, 
+                            reflection_mode=args.reflection_mode, 
+                            transition_mode=args.transition_mode 
                         )
                     else:
                         rows = eval_config_legacy(
@@ -449,7 +469,7 @@ def main():
                             use_error_points=args.use_error_points, use_prev_diag=args.use_prev_diag,
                             smart_jump=args.smart_jump, skip_errors=args.skip_errors,
                             attack_mode=args.attack_mode,
-                            stateless=args.stateless # Pass flag (ignored by legacy but safe)
+                            stateless=args.stateless 
                         )
                     
                     out = RESULTS_DIR / f"abl_turns_{args.defense}{tag}_{t}_seed{seed_r}.csv"
@@ -490,7 +510,11 @@ def main():
                             use_error_points=args.use_error_points, use_prev_diag=args.use_prev_diag,
                             smart_jump=args.smart_jump, skip_errors=args.skip_errors,
                             attack_mode=args.attack_mode,
-                            stateless=args.stateless
+                            stateless=args.stateless,
+                            strategy_mode=args.strategy_mode, 
+                            refine_mode=args.refine_mode, 
+                            reflection_mode=args.reflection_mode, 
+                            transition_mode=args.transition_mode 
                         )
                     else:
                         rows = eval_config_legacy(

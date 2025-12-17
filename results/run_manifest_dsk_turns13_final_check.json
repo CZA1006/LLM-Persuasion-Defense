@@ -31,6 +31,7 @@
     "rewrite_retries": 1,
     "suite": "xteampp",
     "attack_mode": "persuader",
+    "stateless": false,
     "tag": "dsk_turns13_final_check",
     "sleep": 0.25,
     "skip_errors": false,
@@ -68,6 +69,7 @@
       13
     ],
     "skip_errors": false,
-    "attack_mode": "persuader"
+    "attack_mode": "persuader",
+    "stateless": false
   }
 }
