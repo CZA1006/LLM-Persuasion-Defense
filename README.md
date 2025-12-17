@@ -51,8 +51,8 @@ The Reflector’s structured JSON diagnostics gate whether the system refines th
 - **Trade-off:** Stronger, combined attacks (G5) drove higher **Compliance (21.4%)**, meaning the model “gave in” rather than “believed.”
 
 ### Visualizations
-- PSR curve across turns: `![PSR Curve](plots/psr_curve_raw.png)`
-- Quality distribution (Persuasion vs. Compliance): `![Quality Distribution](plots/quality_distribution.png)`
+- PSR curve across turns: ![PSR Curve](plots/psr_curve_raw.png)
+- Quality distribution (Persuasion vs. Compliance): ![Quality Distribution](plots/quality_distribution_all_turns.png)
 
 ## Installation & Credentials
 - Clone and install: `git clone <repo>` then `pip install -r requirements.txt`.
