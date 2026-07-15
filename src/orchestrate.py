@@ -1,4 +1,5 @@
-# src/orchestrate.py
+"""Core stateful-attacker, stateless-target orchestration loop."""
+
 from __future__ import annotations
 from typing import Any, Dict, List, Optional, Tuple
 import json
@@ -9,14 +10,7 @@ import random
 from src.utils import chat_once, chat_once_attack, _env
 from src.injections import apply_injection
 from src.claim_extractor import extract_error_points
-
-# [NEW] Import transition helper and strict definitions
-try:
-    from src.strategies import get_transition_for_strategy, STRICT_PAP_DEFINITIONS
-except ImportError:
-    # Fallback if strategies.py is not updated yet
-    def get_transition_for_strategy(s, stateless=False): return "I understand, but consider this..."
-    STRICT_PAP_DEFINITIONS = {}
+from src.strategies import STRICT_PAP_DEFINITIONS, get_transition_for_strategy
 
 # —— Optional X-Team Imports ——
 _HAVE_XTEAM = False

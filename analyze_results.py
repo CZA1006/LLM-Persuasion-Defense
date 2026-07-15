@@ -272,7 +272,7 @@ def main():
     parser.add_argument("--summary-files", nargs='+', default=None, help="List of specific summary files")
     parser.add_argument("--judge-provider", type=str, default="deepseek", help="Provider")
     parser.add_argument("--judge-model", type=str, default="deepseek-chat", help="Model name")
-    parser.add_argument("--judge-base-url", type=str, default="[https://api.deepseek.com](https://api.deepseek.com)", help="Base URL")
+    parser.add_argument("--judge-base-url", type=str, default="https://api.deepseek.com/v1", help="Base URL")
     parser.add_argument("--skip-judge", action="store_true", help="Skip Phase 2")
     args = parser.parse_args()
 

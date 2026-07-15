@@ -173,8 +173,7 @@ def prebunk_rewrite(
     *,
     chat_fn: ChatFn,
     model: Optional[str] = None,
-    # [NEW] Optional parameter to receive strategy definition from orchestrator
-    plan_strategy: Optional[str] = None 
+    plan_strategy: Optional[str] = None,
 ) -> str:
     """
     Inject subtle prebunking against 1-2 top-likelihood objections.

@@ -1,5 +1,3 @@
-# src/telemetry.py
-# -*- coding: utf-8 -*-
 """
 Lightweight JSONL tracer for experiments.
 
@@ -7,10 +5,9 @@ Lightweight JSONL tracer for experiments.
 - Adds optional fields for X-Teaming and cost tracking:
   plans, draft_scores, chosen_idx, diagnosis, rewrite_used, usage, latency_ms.
 - Safe to disable (enabled=False) -> methods become no-ops.
-- NEW:
-  * autostart: automatically writes a 'run_start' header on init (default True)
-  * log(): backward-compat alias for ad-hoc dict logging (keeps old code working)
-  * robust file naming + thread-safe appends
+- Automatically writes a ``run_start`` header on initialization.
+- Provides a backward-compatible ``log`` alias for ad-hoc dictionary logging.
+- Uses sanitized file names and thread-safe appends.
 """
 
 from __future__ import annotations
@@ -61,7 +58,7 @@ class TraceWriter:
     tag: Optional[str] = None
     enabled: bool = True
     run_meta: Optional[Dict[str, Any]] = None
-    autostart: bool = True  # NEW: write run_start automatically
+    autostart: bool = True
 
     _path: Optional[Path] = field(default=None, init=False, repr=False)
     _fh: Optional[Any] = field(default=None, init=False, repr=False)

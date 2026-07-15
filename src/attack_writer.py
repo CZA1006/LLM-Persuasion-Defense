@@ -2,9 +2,8 @@ from __future__ import annotations
 from typing import Dict, Any, Optional, List
 from textwrap import dedent
 
-from src.utils import chat_once
-# [ADDED] Import transition helper
 from src.strategies import get_transition_for_strategy
+from src.utils import chat_once
 
 def _mk_system(style: str) -> str:
     style = style or "neutral, confident"

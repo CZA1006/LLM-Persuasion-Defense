@@ -54,7 +54,7 @@ def evaluate_one(
     use_error_points: bool = False,
     use_prev_diag: bool = False,
     smart_jump: bool = False,
-    # --------- NEW: optional passthroughs for X-TEAM / backend ---------
+    # Optional X-TEAM and backend passthroughs.
     xteam_on: bool = False,
     plan_k: int = 2,
     rewrite_retries: int = 1,

@@ -1,5 +1,13 @@
-# run_ablation.py
-import argparse, csv, json, random, time, os, inspect, sys  # [FIX] Added sys
+"""Run SAST-IR ablations and write aggregate results."""
+
+import argparse
+import csv
+import inspect
+import json
+import os
+import random
+import sys
+import time
 from pathlib import Path
 from statistics import mean, pstdev
 from math import sqrt
@@ -11,7 +19,7 @@ from src.strategies import ORDER_DEFAULT
 from src.evaluate import evaluate_one
 from src.telemetry import TraceWriter
 
-# Try loading new orchestrator
+# Keep the legacy evaluator importable when optional orchestration code is unavailable.
 try:
     from src.orchestrate import crescendo_trial as _CRESCENDO_TRIAL
     _HAVE_CRESCENDO = True
@@ -317,8 +325,7 @@ def _apply_turns_preset(args):
 
 def _apply_suite_shortcut(args):
     """
-    [FIXED] Only apply suite defaults if USER DID NOT PROVIDE overrides via CLI.
-    Checks sys.argv for explicit flags.
+    Apply suite defaults without replacing values explicitly supplied on the CLI.
     """
     if not args.suite: return
     
@@ -326,14 +333,12 @@ def _apply_suite_shortcut(args):
         args.xteam = "off"
     elif args.suite == "xteam":
         args.xteam = "on"
-        # Only override if not present in CLI args
         if "--plan-k" not in sys.argv:
             args.plan_k = 2
         if "--rewrite-retries" not in sys.argv:
             args.rewrite_retries = 0
     elif args.suite == "xteampp":
         args.xteam = "on"
-        # [FIX] Respect user CLI argument for plan_k
         if "--plan-k" not in sys.argv:
             args.plan_k = 2
         if "--rewrite-retries" not in sys.argv:
@@ -379,7 +384,7 @@ def main():
     ap.add_argument("--attack-mode", choices=["persuader","crescendo"], default="persuader")
     ap.add_argument("--stateless", action="store_true", help="Enable stateless/iterative refinement mode")
     
-    # [NEW] Ablation Control Variables
+    # Ablation control variables.
     ap.add_argument("--strategy-mode", choices=["single", "hybrid", "flexible"], default="hybrid", help="PAP Strategy constraint")
     ap.add_argument("--refine-mode", choices=["smart", "always_new", "always_refine"], default="smart", help="Refinement logic")
     ap.add_argument("--reflection-mode", choices=["full", "blind"], default="full", help="Attacker memory of diagnosis")
@@ -420,7 +425,6 @@ def main():
         "xteam": args.xteam, "plan_k": args.plan_k, "rewrite_retries": args.rewrite_retries,
         "suite": args.suite, "turns_effective": args.turns, "skip_errors": args.skip_errors,
         "attack_mode": args.attack_mode, "stateless": args.stateless,
-        # [NEW] Log the ablation vars
         "strategy_mode": args.strategy_mode, 
         "refine_mode": args.refine_mode,
         "reflection_mode": args.reflection_mode,
