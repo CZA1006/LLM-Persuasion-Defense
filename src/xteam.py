@@ -298,7 +298,7 @@ def _planner_user(example: Dict[str, Any], ctx: Dict[str, Any], k: int, reflecti
 
     strategies_str = "\n- ".join(PAP_STRATEGIES)
     
-    # [NEW] Dynamic instruction based on mode
+    # Adjust planner constraints for the selected ablation mode.
     hybrid_instr = ""
     if strategy_mode == "hybrid":
         hybrid_instr = "Strategy: You MAY combine 2 strategies (e.g. 'Logic + Social').\n"
@@ -529,10 +529,9 @@ def reflect_on_failure(
     chat_fn: ChatFn,
     model: Optional[str] = None,
     retries: int = 1,
-    strategy_mode: str = "hybrid" # [ADDED]
+    strategy_mode: str = "hybrid",
 ) -> Dict[str, Any]:
     """
-    NEW: Self-Reflection Step.
     Analyzes history + last diagnosis to produce a structured strategic pivot for the next turn.
     """
     hist_str = "\n".join([f"Turn: {h[0]} | Answer: {h[1]}" for h in history])
@@ -545,7 +544,7 @@ def reflect_on_failure(
         text, _meta = _call_chat(chat_fn, system=sys_prompt, user=user_prompt, model_override=model)
         obj = _extract_json(text)
         if isinstance(obj, dict) and "next_meta_tactic" in obj:
-            # [LOGIC] Only normalize if NOT flexible
+            # Flexible mode may return tactics outside the strict allowlist.
             if strategy_mode != "flexible":
                 raw_tactic = obj["next_meta_tactic"]
                 best_match = "Logical Appeal" # Default
@@ -572,11 +571,10 @@ def plan_paths(
     model: Optional[str] = None,
     retries: int = 2,
     reflection: Optional[Dict[str, Any]] = None,
-    strategy_mode: str = "hybrid" # [ADDED]
+    strategy_mode: str = "hybrid",
 ) -> List[Dict[str, Any]]:
     """Return exactly k plans. Now guided by 'reflection' if provided."""
     sys_prompt = _planner_system()
-    # [PASSED] strategy_mode passed to user prompt
     user_prompt = _planner_user(example, ctx, k, reflection=reflection, strategy_mode=strategy_mode)
     out: Optional[Any] = None
 

@@ -1,0 +1,27 @@
+cff-version: 1.2.0
+message: "If you use this software, please cite the technical report and this repository."
+title: "SAST-IR: Benchmarking Factual Robustness via Multi-conversation Persuasion"
+type: software
+authors:
+  - family-names: Cai
+    given-names: Zhuoang
+    email: zcaiat@connect.ust.hk
+repository-code: "https://github.com/CZA1006/LLM-Persuasion-Defense"
+url: "https://github.com/CZA1006/LLM-Persuasion-Defense"
+license: MIT
+version: 1.0.0
+date-released: 2025-12-18
+keywords:
+  - large language models
+  - factual robustness
+  - red teaming
+  - persuasion
+  - counterfactual evaluation
+preferred-citation:
+  type: report
+  title: "Benchmarking Factual Robustness of LLMs via Multi-conversation Persuasion"
+  authors:
+    - family-names: Cai
+      given-names: Zhuoang
+  year: 2025
+  url: "https://github.com/CZA1006/LLM-Persuasion-Defense"

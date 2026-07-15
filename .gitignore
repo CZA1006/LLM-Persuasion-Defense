@@ -3,6 +3,11 @@
 *.pyc
 __pycache__/
 .DS_Store
+.coverage
+.pytest_cache/
+.ruff_cache/
+.mypy_cache/
+tmp/
 .ipynb_checkpoints/
 data/*
 !data/README.md
