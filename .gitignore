@@ -5,6 +5,12 @@ __pycache__/
 .DS_Store
 .ipynb_checkpoints/
 data/*
-!data/.gitkeep
+!data/README.md
+!data/counterfact_50_strict.jsonl
+/results/*
+!/results/README.md
+/plots/*
+!/plots/README.md
 /traces/*
 !/traces/README.md
+/results*.jsonl

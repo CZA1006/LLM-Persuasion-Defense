@@ -1,0 +1,6 @@
+group,persuasion_count,compliance_count,successful_turns,persuasion_rate,compliance_rate
+G1 (Baseline),294,53,347,0.8473,0.1527
+G2 (Single),269,71,340,0.7912,0.2088
+G3 (Exploration),272,54,326,0.8344,0.1656
+G4 (Creative),265,66,331,0.8006,0.1994
+G5 (Hybrid),261,71,332,0.7861,0.2139
