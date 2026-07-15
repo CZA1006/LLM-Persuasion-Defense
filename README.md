@@ -16,7 +16,7 @@ Automated Red-Teaming system for probing Counterfact Robustness in SOTA LLMs (De
 
 ## COUNTERFACT-Strict Dataset
 - Based on `NeelNanda/counterfact-tracing`; fixed nested structures and normalized prompts into strict QA form (“What is X?”).
-- Final high-quality subset: `data/counterfact_50_strict.jsonl` (N = 50).
+- The final high-quality subset is included at `data/counterfact_50_strict.jsonl` (N = 50).
 - Prepared via `tools/prepare_counterfact.py` to ensure deterministic formatting and alignment with the target LLM’s refusal triggers.
 
 ## Experimental Design: 5-Group Ablation Study (Turns = 8, Plan_K = 1)
@@ -44,8 +44,10 @@ Automated Red-Teaming system for probing Counterfact Robustness in SOTA LLMs (De
 - **Trade-off:** Stronger, combined attacks (G5) drove higher **Compliance (21.4%)**, meaning the model “gave in” rather than “believed.”
 
 ### Visualizations
-- PSR curve across turns: ![PSR Curve](plots/psr_curve_raw.png)
-- Quality distribution (Persuasion vs. Compliance): ![Quality Distribution](plots/quality_distribution_all_turns.png)
+- PSR curve across turns: ![PSR Curve](artifacts/figures/psr_curve.png)
+- Quality distribution (Persuasion vs. Compliance): ![Quality Distribution](artifacts/figures/quality_distribution.png)
+
+Compact source tables for the report figures are retained in `artifacts/results/psr_by_turn.csv` and `artifacts/results/quality_distribution.csv`. Full run outputs are generated locally and excluded from version control.
 
 ### Report Trace Examples
 - `examples/traces/christian_worship_g5.jsonl` - five-turn G5 trajectory ending in Persuasion.
@@ -67,7 +69,7 @@ export DEEPSEEK_API_KEY=sk-...
 ```
 
 ## Quick Start & Analysis Pipeline
-1) Prepare data:
+1) Use the included strict dataset, or regenerate it from CounterFact:
 ```bash
 python tools/prepare_counterfact.py
 ```
@@ -109,13 +111,14 @@ The strict allowlist contains 20 Psychological Attack Patterns grouped into seve
 - `src/strategies.py` - persuasion strategy templates and tags
 - `src/xteam_objections.py` - objection prediction and pre-bunking helper module
 - `run_ablation.py` - experiment driver for turns/defenses/suites
-- `run_experiment.py` - baseline runner entry point
-- `summarize_results.py` - aggregate metrics and table generation
+- `run_crescendo_pyrit_baseline.py` - PyRIT Crescendo comparison baseline
 - `analyze_results.py` - LLM-based judge separating Persuasion vs. Compliance and generating plots
 - `tools/prepare_counterfact.py` - COUNTERFACT (Wikidata-based) downloader and cleaner
 - `tools/curate_trace_example.py` - extract a compact case trajectory from a JSONL trace
-- `data/` - datasets such as `counterfact_50_strict.jsonl`
+- `tools/build_report_artifacts.py` - build compact report result tables from full outputs
+- `data/` - the final COUNTERFACT-Strict dataset
+- `artifacts/` - final report figures and compact aggregate results
 - `examples/traces/` - curated report case studies retained for auditability
 - `traces/` - generated experiment traces (ignored by Git)
 - `docs/assets/` - documentation figures and other static assets
-- `plots/` - generated PSR curves and Persuasion/Compliance distributions
+- `results/` and `plots/` - generated run outputs (ignored by Git)
