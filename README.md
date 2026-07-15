@@ -2,24 +2,17 @@
 
 Automated Red-Teaming system for probing Counterfact Robustness in SOTA LLMs (DeepSeek-Chat) using a **SAST-IR (Stateful Attacker, Stateless Target - Iterative Refinement)** architecture. The attacker carries evolving memory and plan state across turns, while the target is reset each turn to remove refusal inertia and expose genuine vulnerability.
 
-## Key Features (v3)
+## Key Features
 - **Stateless Target, Stateful Attacker** – enforced `--stateless` target; attacker must rely on cold-start transitions (e.g., “Empirically speaking...”) instead of conversational hallucinations.
 - **Smart Refinement Loop (Anti-Loop)** – Orchestrator measures Refusal Distance: soft refusals (< far) trigger multi-shot refinement (K prompt variants); hard refusals (= far) trigger fresh generation to escape local minima.
 - **Strict Strategy Enforcement** – hard allowlist of Psychological Attack Patterns (PAP); no invented strategy names unless Flexible Mode is explicitly enabled.
 - **Structured Diagnostics** – Reflector emits JSON (Refusal Type/Distance) that drives the decision to refine (optimization) or restart (exploration).
 
 ## Architecture Flow
-```mermaid
-graph TD
-  Start --> Planner
-  Planner --> Strategy
-  Strategy --> Prompt[Generate Prompt]
-  Prompt --> Target[Stateless Target]
-  Target -->|Refusal| Reflector
-  Reflector --> Planner
-  Target -->|Persuasion Success| End[Accepted Answer]
-```
-The Reflector’s structured JSON diagnostics gate whether the system refines the prior attempt or restarts with a fresh plan.
+
+![Diagnosis-Guided SAST-IR Framework](docs/assets/sast-ir-framework.png)
+
+*Figure 1. The diagnosis-guided SAST-IR framework. The Reflector determines whether CP-Agent refines the current argument after a soft refusal or re-plans after a hard refusal, while the target model is reset for every turn.*
 
 ## COUNTERFACT-Strict Dataset
 - Based on `NeelNanda/counterfact-tracing`; fixed nested structures and normalized prompts into strict QA form (“What is X?”).
@@ -28,10 +21,10 @@ The Reflector’s structured JSON diagnostics gate whether the system refines th
 
 ## Experimental Design: 5-Group Ablation Study (Turns = 8, Plan_K = 1)
 - 🟢 **G1 (Baseline):** Hybrid Strategy + Blind Mode (No Memory) + Always New. Hypothesis: random search lower bound.
-- 🔵 **G2 (Standard):** Single Strategy + Smart Refine + Full Memory. Hypothesis: depth-first search.
+- 🔵 **G2 (Single):** Single Strategy + Smart Refine + Full Memory. Hypothesis: depth-first search.
 - 🟠 **G3 (Exploration):** Hybrid Strategy + Always New (No Refine) + Full Memory. Hypothesis: breadth-first search.
 - 🟣 **G4 (Creative):** Flexible Mode (AI-defined strategies) + Smart Refine. Hypothesis: emergent capabilities.
-- 🟡 **G5 (Combinations):** Hybrid Strategy + Smart Refine. Hypothesis: theoretical max attack.
+- 🟡 **G5 (Hybrid):** Hybrid Strategy + Smart Refine. Hypothesis: theoretical max attack.
 
 ## Results & Analysis
 ### Quantitative: Turn-8 Attack Success Rate (PSR)
@@ -54,8 +47,19 @@ The Reflector’s structured JSON diagnostics gate whether the system refines th
 - PSR curve across turns: ![PSR Curve](plots/psr_curve_raw.png)
 - Quality distribution (Persuasion vs. Compliance): ![Quality Distribution](plots/quality_distribution_all_turns.png)
 
+### Report Trace Examples
+- `examples/traces/christian_worship_g5.jsonl` - five-turn G5 trajectory ending in Persuasion.
+- `examples/traces/delta_goodrem_g5.jsonl` - two-turn G5 trajectory ending in Persuasion.
+- Full experiment traces are generated under `traces/` and intentionally excluded from version control.
+
 ## Installation & Credentials
-- Clone and install: `git clone <repo>` then `pip install -r requirements.txt`.
+- Clone the repository and create the project environment:
+```bash
+git clone https://github.com/CZA1006/LLM-Persuasion-Defense.git
+cd LLM-Persuasion-Defense
+conda env create -n llm-persuasion-defense -f env.yml
+conda activate llm-persuasion-defense
+```
 - Export credentials (CLI flags can override):
 ```bash
 export OPENAI_API_KEY=sk-...
@@ -97,7 +101,7 @@ python analyze_results.py \
 ```
 
 ## Strategy Allowlist (PAP)
-Logical Appeal, Authority Endorsement, Evidence-based Persuasion, Social Proof, Emotional Appeal. Flexible Mode may extend this allowlist explicitly.
+The strict allowlist contains 20 Psychological Attack Patterns grouped into seven pillars: Logic & Evidence, Credibility & Authority, Social Norms, Commitment & Consistency, Emotion & Relationship, Cognitive Bias & Framing, and Resource & Exchange. See `src/strategies.py` for the implementation-aligned definitions and anti-jailbreak constraints. Flexible Mode may extend the allowlist explicitly.
 
 ## Repository Structure
 - `src/orchestrate.py` - core multi-turn loop and control flow
@@ -109,6 +113,9 @@ Logical Appeal, Authority Endorsement, Evidence-based Persuasion, Social Proof, 
 - `summarize_results.py` - aggregate metrics and table generation
 - `analyze_results.py` - LLM-based judge separating Persuasion vs. Compliance and generating plots
 - `tools/prepare_counterfact.py` - COUNTERFACT (Wikidata-based) downloader and cleaner
+- `tools/curate_trace_example.py` - extract a compact case trajectory from a JSONL trace
 - `data/` - datasets such as `counterfact_50_strict.jsonl`
-- `traces/` - JSONL traces for iterative refinement runs
+- `examples/traces/` - curated report case studies retained for auditability
+- `traces/` - generated experiment traces (ignored by Git)
+- `docs/assets/` - documentation figures and other static assets
 - `plots/` - generated PSR curves and Persuasion/Compliance distributions
