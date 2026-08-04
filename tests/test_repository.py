@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import csv
+import hashlib
 import json
 import unittest
 from pathlib import Path
@@ -61,11 +62,17 @@ class RepositoryIntegrityTests(unittest.TestCase):
             "LICENSE",
             "CITATION.cff",
             "docs/assets/sast-ir-framework.png",
+            "docs/report/benchmarking-factual-robustness-via-multi-conversation-persuasion.pdf",
             "artifacts/figures/psr_curve.png",
             "artifacts/figures/quality_distribution.png",
         ]
         for relative_path in required_paths:
             self.assertTrue((ROOT / relative_path).is_file(), relative_path)
+
+    def test_report_checksum(self) -> None:
+        path = ROOT / "docs" / "report" / "benchmarking-factual-robustness-via-multi-conversation-persuasion.pdf"
+        digest = hashlib.sha256(path.read_bytes()).hexdigest()
+        self.assertEqual(digest, "79dd06c7fe24782c95dedc473f4d15c2aeb905c221cbc67656635875e8610425")
 
 
 if __name__ == "__main__":

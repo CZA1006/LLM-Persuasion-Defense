@@ -3,11 +3,12 @@
 [![CI](https://github.com/CZA1006/LLM-Persuasion-Defense/actions/workflows/ci.yml/badge.svg)](https://github.com/CZA1006/LLM-Persuasion-Defense/actions/workflows/ci.yml)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
 [![Python 3.10](https://img.shields.io/badge/Python-3.10-blue.svg)](env.yml)
+[![Report PDF](https://img.shields.io/badge/Report-PDF-red.svg)](docs/report/benchmarking-factual-robustness-via-multi-conversation-persuasion.pdf)
 [![CITATION.cff](https://img.shields.io/badge/Cite-CITATION.cff-green.svg)](CITATION.cff)
 
 Official implementation and research artifacts for **SAST-IR** (Stateful Attacker, Stateless Target - Iterative Refinement), a framework for evaluating whether language models can be persuaded to output counterfactual claims when every target-model turn starts from a clean conversation.
 
-> **Research status:** This repository accompanies the 2025 technical report *Benchmarking Factual Robustness of LLMs via Multi-conversation Persuasion*. The reported experiments are a mechanism-focused case study on DeepSeek-Chat and a 50-example benchmark subset; they are not a comprehensive estimate of factual robustness across models or domains.
+> **Research status:** This repository accompanies the 2025 technical report [*Benchmarking Factual Robustness of LLMs via Multi-conversation Persuasion*](docs/report/benchmarking-factual-robustness-via-multi-conversation-persuasion.pdf). The reported experiments are a mechanism-focused case study on DeepSeek-Chat and a 50-example benchmark subset; they are not a comprehensive estimate of factual robustness across models or domains.
 
 ## Abstract
 
@@ -155,6 +156,7 @@ These checks are offline and do not require API credentials.
 | `analyze_results.py` | Aggregate analysis and persuasion/compliance judge |
 | `data/` | Versioned strict benchmark subset and provenance |
 | `artifacts/` | Report figures and compact aggregate result tables |
+| `docs/report/` | Complete technical report and bibliographic metadata |
 | `examples/traces/` | Two curated trajectories discussed in the report |
 | `tools/` | Dataset preparation, trace curation, and artifact generation |
 | `results/`, `plots/`, `traces/` | Ignored runtime outputs |
@@ -174,7 +176,7 @@ This code is intended for authorized robustness evaluation and defensive researc
 
 ## Citation
 
-If this repository supports your work, cite the technical report and the software release. GitHub can export the software citation from [`CITATION.cff`](CITATION.cff).
+If this repository supports your work, cite the [complete technical report](docs/report/benchmarking-factual-robustness-via-multi-conversation-persuasion.pdf) and the software release. GitHub can export the software citation from [`CITATION.cff`](CITATION.cff).
 
 ```bibtex
 @techreport{cai2025sastir,
