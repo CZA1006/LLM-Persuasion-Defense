@@ -35,7 +35,7 @@ The implementation uses 20 Psychological Attack Patterns grouped into seven fami
 
 ### Data
 
-`data/counterfact_50_strict.jsonl` contains the 50-example COUNTERFACT-Strict subset used in the report. It was derived from CounterFact and converted from completion-style records into unambiguous question-answer records with one true and one counterfactual object. See [`data/README.md`](data/README.md) for provenance and schema.
+`data/counterfact_50_strict.jsonl` contains the 50-example COUNTERFACT-Strict subset used in the report. It was derived from CounterFact and converted from completion-style records into unambiguous question-answer records with one true and one counterfactual object. See [`data/README.md`](data/README.md) for provenance and schema. The dataset is also available on Hugging Face: [nickzcai/counterfact-strict](https://huggingface.co/datasets/nickzcai/counterfact-strict).
 
 ### Ablations
 
